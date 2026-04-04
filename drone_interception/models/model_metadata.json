@@ -1,0 +1,26 @@
+{
+  "model_name": "drone_interceptor_ppo_v1",
+  "algorithm": "PPO",
+  "version": "1.0.0",
+  "saved_at": "2026-04-04T05:41:40.690168",
+  "training_timesteps": 1000000,
+  "interception_rate": "N/A",
+  "collision_rate": 0.2,
+  "avg_reward": 582.6607712405373,
+  "cost_per_interception_usd": "N/A",
+  "avg_steps_to_intercept": 132.44,
+  "training_time_min": 0.0,
+  "environment": {
+    "arena_size": 10.0,
+    "capture_distance": 1.0,
+    "max_steps": 500,
+    "evader_speed": 2.0,
+    "drone_mass": 1.0,
+    "max_force": 5.0
+  },
+  "deployment": {
+    "edge_device": "Jetson Nano / RPi 4",
+    "inference_ms": "<10",
+    "model_size_kb": 1722.1
+  }
+}
