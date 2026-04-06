@@ -31,15 +31,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 IRAN_LAUNCH_SITES = [
     {"lat": 27.18, "lon": 56.27, "label": "Bandar Abbas"},
     {"lat": 26.55, "lon": 54.35, "label": "Bandar Lengeh"},
-    {"lat": 27.20, "lon": 52.60, "label": "Bushehr"},
-    {"lat": 25.44, "lon": 57.08, "label": "Jask"},
-    {"lat": 26.95, "lon": 55.05, "label": "Qeshm Island"},
+    {"lat": 28.97, "lon": 50.84, "label": "Bushehr"},
+    {"lat": 25.64, "lon": 57.78, "label": "Jask"},
     {"lat": 27.50, "lon": 56.90, "label": "Minab"},
-    {"lat": 26.32, "lon": 54.20, "label": "Sirri Island"},
+    {"lat": 27.19, "lon": 56.22, "label": "Bandar-e Shahid Rajaee"},
+    {"lat": 30.28, "lon": 48.30, "label": "Abadan"},
 ]
 
 AIRBASES = {
     "Al Dhafra AB, UAE": {"lat": 24.2481, "lon": 54.5472},
+    "Camp Arifjan, Kuwait": {"lat": 29.3417, "lon": 47.9775},
     "Prince Sultan AB, KSA": {"lat": 24.0627, "lon": 47.5802},
 }
 
@@ -158,8 +159,9 @@ def generate_scenario(base_name, seed=42):
             int_lat, int_lon = base_lat, base_lon
         else:
             pt = min(1.0, (t - yolo_t) / (kill_t - yolo_t))
-            int_lat = lerp(base_lat, adv_lat, pt * 0.97) + rng.normal(0, 0.003)
-            int_lon = lerp(base_lon, adv_lon, pt * 0.97) + rng.normal(0, 0.003)
+            # Smooth pursuit — direct intercept path, no jitter
+            int_lat = lerp(base_lat, adv_lat, pt * 0.97)
+            int_lon = lerp(base_lon, adv_lon, pt * 0.97)
 
         if pn <= 1:
             yc = 0.0
@@ -200,133 +202,216 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
 
     layers = []
 
-    # --- Adversary trail (red) ---
+    # ── ADVERSARY TRAIL: triple-layer glow (outer→mid→core) ──
     if n >= 2:
         adv_path = [[f["adv_lon"], f["adv_lat"], f["adv_alt"]] for f in frames[:n]]
+        # Outer glow — wide, very transparent
         layers.append(pdk.Layer(
-            "PathLayer",
-            data=[{"path": adv_path, "color": [255, 50, 50]}],
-            get_path="path",
-            get_color="color",
-            width_min_pixels=4,
-            get_width=5,
+            "PathLayer", id="adv-glow-outer",
+            data=[{"path": adv_path, "color": [255, 40, 40, 35]}],
+            get_path="path", get_color="color",
+            width_min_pixels=14, get_width=80,
+        ))
+        # Mid glow
+        layers.append(pdk.Layer(
+            "PathLayer", id="adv-glow-mid",
+            data=[{"path": adv_path, "color": [255, 60, 30, 90]}],
+            get_path="path", get_color="color",
+            width_min_pixels=8, get_width=40,
+        ))
+        # Bright core
+        layers.append(pdk.Layer(
+            "PathLayer", id="adv-core",
+            data=[{"path": adv_path, "color": [255, 100, 80, 240]}],
+            get_path="path", get_color="color",
+            width_min_pixels=3, get_width=12,
         ))
 
-    # --- Interceptor trail (blue, only if launched) ---
+    # ── INTERCEPTOR TRAIL: triple-layer glow (cyan-blue) ──
     if n >= 1 and frames[min(n - 1, len(frames) - 1)]["pn"] >= 3:
         int_path = [[f["int_lon"], f["int_lat"], f["int_alt"]]
                      for f in frames[:n] if f["t"] >= PHASE_YOLO]
         if len(int_path) >= 2:
             layers.append(pdk.Layer(
-                "PathLayer",
-                data=[{"path": int_path, "color": [50, 130, 255]}],
-                get_path="path",
-                get_color="color",
-                width_min_pixels=4,
-                get_width=5,
+                "PathLayer", id="int-glow-outer",
+                data=[{"path": int_path, "color": [30, 120, 255, 35]}],
+                get_path="path", get_color="color",
+                width_min_pixels=14, get_width=80,
+            ))
+            layers.append(pdk.Layer(
+                "PathLayer", id="int-glow-mid",
+                data=[{"path": int_path, "color": [40, 150, 255, 90]}],
+                get_path="path", get_color="color",
+                width_min_pixels=8, get_width=40,
+            ))
+            layers.append(pdk.Layer(
+                "PathLayer", id="int-core",
+                data=[{"path": int_path, "color": [80, 200, 255, 240]}],
+                get_path="path", get_color="color",
+                width_min_pixels=3, get_width=12,
             ))
 
-    # --- Current drone positions (scatterplot) ---
-    points = []
+    # ── DRONE POSITION MARKERS: outer halo + inner dot ──
+    halos = []
+    dots = []
     if n >= 1:
         cur = frames[n - 1]
         # Adversary
-        points.append({
-            "lon": cur["adv_lon"], "lat": cur["adv_lat"],
-            "alt": cur["adv_alt"],
-            "color": [255, 50, 50, 230], "radius": 1200,
-            "label": "HOSTILE UAV",
-        })
-        # Interceptor (only if launched)
+        halos.append({"lon": cur["adv_lon"], "lat": cur["adv_lat"],
+                      "color": [255, 50, 50, 70], "radius": 3500, "label": ""})
+        dots.append({"lon": cur["adv_lon"], "lat": cur["adv_lat"],
+                     "color": [255, 100, 80, 255], "radius": 1200,
+                     "label": f"HOSTILE UAV | {cur['dist_km']}km | BRG {cur['bearing']}°"})
+        # Interceptor
         if cur["pn"] >= 3:
-            points.append({
-                "lon": cur["int_lon"], "lat": cur["int_lat"],
-                "alt": cur["int_alt"],
-                "color": [50, 130, 255, 230], "radius": 1200,
-                "label": "INTERCEPTOR",
-            })
+            halos.append({"lon": cur["int_lon"], "lat": cur["int_lat"],
+                          "color": [40, 150, 255, 70], "radius": 3500, "label": ""})
+            dots.append({"lon": cur["int_lon"], "lat": cur["int_lat"],
+                         "color": [80, 200, 255, 255], "radius": 1200,
+                         "label": f"RL INTERCEPTOR | Phase: {cur['phase']}"})
 
-    if points:
+    if halos:
         layers.append(pdk.Layer(
-            "ScatterplotLayer",
-            data=points,
-            get_position=["lon", "lat"],
-            get_radius="radius",
-            get_fill_color="color",
-            pickable=True,
+            "ScatterplotLayer", id="drone-halos",
+            data=halos, get_position=["lon", "lat"],
+            get_radius="radius", get_fill_color="color", pickable=False,
+        ))
+    if dots:
+        layers.append(pdk.Layer(
+            "ScatterplotLayer", id="drone-dots",
+            data=dots, get_position=["lon", "lat"],
+            get_radius="radius", get_fill_color="color", pickable=True,
         ))
 
-    # --- Base marker (large green) ---
+    # ── BASE MARKER: double ring + label ──
     layers.append(pdk.Layer(
-        "ScatterplotLayer",
-        data=[{"lon": blon, "lat": blat, "label": base_name}],
-        get_position=["lon", "lat"],
-        get_radius=2500,
-        get_fill_color=[50, 200, 255, 180],
-        pickable=True,
+        "ScatterplotLayer", id="base-halo",
+        data=[{"lon": blon, "lat": blat, "label": ""}],
+        get_position=["lon", "lat"], get_radius=4000,
+        get_fill_color=[50, 220, 255, 50], pickable=False,
+    ))
+    layers.append(pdk.Layer(
+        "ScatterplotLayer", id="base-dot",
+        data=[{"lon": blon, "lat": blat, "label": f"🛡️ {base_name}"}],
+        get_position=["lon", "lat"], get_radius=2000,
+        get_fill_color=[50, 220, 255, 200], pickable=True,
     ))
 
-    # --- Iran launch site (red) ---
+    # ── IRAN LAUNCH SITE: double ring ──
     layers.append(pdk.Layer(
-        "ScatterplotLayer",
-        data=[{"lon": iran_lon, "lat": iran_lat, "label": f"🇮🇷 {iran_label}"}],
-        get_position=["lon", "lat"],
-        get_radius=2500,
-        get_fill_color=[255, 80, 80, 180],
-        pickable=True,
+        "ScatterplotLayer", id="iran-halo",
+        data=[{"lon": iran_lon, "lat": iran_lat, "label": ""}],
+        get_position=["lon", "lat"], get_radius=4000,
+        get_fill_color=[255, 60, 60, 50], pickable=False,
+    ))
+    layers.append(pdk.Layer(
+        "ScatterplotLayer", id="iran-dot",
+        data=[{"lon": iran_lon, "lat": iran_lat, "label": f"🇮🇷 {iran_label}, Iran"}],
+        get_position=["lon", "lat"], get_radius=2000,
+        get_fill_color=[255, 80, 80, 200], pickable=True,
     ))
 
-    # --- Arc from Iran to base (threat vector) ---
+    # ── TEXT LABELS ──
+    labels = [
+        {"lon": blon, "lat": blat - 0.12, "text": base_name.split(",")[0]},
+        {"lon": iran_lon, "lat": iran_lat + 0.12, "text": f"{iran_label}"},
+    ]
     layers.append(pdk.Layer(
-        "ArcLayer",
+        "TextLayer", id="map-labels",
+        data=labels, get_position=["lon", "lat"],
+        get_text="text", get_size=14,
+        get_color=[220, 230, 240, 220],
+        get_angle=0, get_text_anchor="'middle'",
+        get_alignment_baseline="'center'",
+        font_family="'Courier New', monospace",
+        font_weight=700,
+    ))
+
+    # ── THREAT VECTOR ARC: Iran → base (dashed feel via width) ──
+    layers.append(pdk.Layer(
+        "ArcLayer", id="threat-arc",
         data=[{
             "source_lon": iran_lon, "source_lat": iran_lat,
             "target_lon": blon, "target_lat": blat,
         }],
         get_source_position=["source_lon", "source_lat"],
         get_target_position=["target_lon", "target_lat"],
-        get_source_color=[255, 80, 80, 120],
-        get_target_color=[50, 200, 255, 120],
-        get_width=2,
+        get_source_color=[255, 80, 60, 100],
+        get_target_color=[50, 220, 255, 100],
+        get_width=3,
         great_circle=True,
     ))
 
-    # --- RF detection ring (80km ≈ 0.72°) ---
+    # ── RF DETECTION RING (80km ≈ 0.72°) — amber dashed ──
+    rf_pts = 80
     rf_ring = [[blon + 0.72 * math.cos(a), blat + 0.72 * math.sin(a)]
-               for a in np.linspace(0, 2 * math.pi, 64)]
+               for a in np.linspace(0, 2 * math.pi, rf_pts)]
     rf_ring.append(rf_ring[0])
+    # Outer glow
     layers.append(pdk.Layer(
-        "PathLayer",
-        data=[{"path": rf_ring, "color": [255, 200, 50, 100]}],
+        "PathLayer", id="rf-ring-glow",
+        data=[{"path": rf_ring, "color": [255, 200, 50, 30]}],
+        get_path="path", get_color="color", width_min_pixels=6,
+    ))
+    # Core
+    layers.append(pdk.Layer(
+        "PathLayer", id="rf-ring-core",
+        data=[{"path": rf_ring, "color": [255, 200, 50, 120]}],
         get_path="path", get_color="color", width_min_pixels=2,
     ))
+    # RF label
+    layers.append(pdk.Layer(
+        "TextLayer", id="rf-label",
+        data=[{"lon": blon + 0.72, "lat": blat, "text": "RF 80km"}],
+        get_position=["lon", "lat"], get_text="text", get_size=11,
+        get_color=[255, 200, 50, 180],
+        font_family="'Courier New', monospace", font_weight=700,
+    ))
 
-    # --- YOLO detection ring (30km ≈ 0.27°) ---
+    # ── YOLO DETECTION RING (30km ≈ 0.27°) — green dashed ──
     yolo_ring = [[blon + 0.27 * math.cos(a), blat + 0.27 * math.sin(a)]
-                 for a in np.linspace(0, 2 * math.pi, 64)]
+                 for a in np.linspace(0, 2 * math.pi, rf_pts)]
     yolo_ring.append(yolo_ring[0])
     layers.append(pdk.Layer(
-        "PathLayer",
-        data=[{"path": yolo_ring, "color": [50, 255, 50, 100]}],
+        "PathLayer", id="yolo-ring-glow",
+        data=[{"path": yolo_ring, "color": [50, 255, 120, 30]}],
+        get_path="path", get_color="color", width_min_pixels=6,
+    ))
+    layers.append(pdk.Layer(
+        "PathLayer", id="yolo-ring-core",
+        data=[{"path": yolo_ring, "color": [50, 255, 120, 120]}],
         get_path="path", get_color="color", width_min_pixels=2,
     ))
+    layers.append(pdk.Layer(
+        "TextLayer", id="yolo-label",
+        data=[{"lon": blon + 0.27, "lat": blat, "text": "YOLO 30km"}],
+        get_position=["lon", "lat"], get_text="text", get_size=11,
+        get_color=[50, 255, 120, 180],
+        font_family="'Courier New', monospace", font_weight=700,
+    ))
 
-    # --- Kill marker ---
+    # ── KILL MARKER: explosion-style concentric rings ──
     if n >= 1 and frames[n - 1]["pn"] == 4:
         cur = frames[n - 1]
-        layers.append(pdk.Layer(
-            "ScatterplotLayer",
-            data=[{"lon": cur["adv_lon"], "lat": cur["adv_lat"], "label": "KILL CONFIRMED"}],
-            get_position=["lon", "lat"],
-            get_radius=3000,
-            get_fill_color=[50, 255, 50, 200],
-            pickable=True,
-        ))
+        for r, a in [(5000, 30), (3500, 60), (2000, 140)]:
+            layers.append(pdk.Layer(
+                "ScatterplotLayer", id=f"kill-ring-{r}",
+                data=[{"lon": cur["adv_lon"], "lat": cur["adv_lat"],
+                       "label": "✅ KILL CONFIRMED" if r == 2000 else ""}],
+                get_position=["lon", "lat"], get_radius=r,
+                get_fill_color=[50, 255, 100, a], pickable=(r == 2000),
+            ))
+
+    # ── VIEW STATE — adaptive zoom per base distance ──
+    dlat = abs(blat - iran_lat)
+    dlon = abs(blon - iran_lon)
+    span = max(dlat, dlon)
+    zoom = 6.5 if span < 5 else (5.8 if span < 8 else 5.2)
 
     view = pdk.ViewState(
         latitude=mid_lat,
         longitude=mid_lon,
-        zoom=6.5,
+        zoom=zoom,
         pitch=45,
         bearing=10,
     )
@@ -598,6 +683,23 @@ if launch:
     st.markdown(f'<div class="st2">SCENARIO: 🇮🇷 {iran_label.upper()}, IRAN → 🛡️ {selected_base.upper()}</div>',
                 unsafe_allow_html=True)
 
+    # Domain Randomization — show prominently above banner
+    if dr_params:
+        st.markdown(
+            '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;">' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Mass</div><div class="mv" style="font-size:1em">{dr_params["drone_mass"]}kg</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Thrust</div><div class="mv" style="font-size:1em">{dr_params["max_force"]}N</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Drag</div><div class="mv" style="font-size:1em">{dr_params["drag_coeff"]}</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Evader</div><div class="mv" style="font-size:1em">{dr_params["evader_speed"]}m/s</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Obstacles</div><div class="mv" style="font-size:1em">{dr_params["num_obstacles"]}</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Noise</div><div class="mv" style="font-size:1em">σ{dr_params["obs_noise_std"]}</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Delay</div><div class="mv" style="font-size:1em">{dr_params["action_delay"]}step</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Gravity</div><div class="mv" style="font-size:1em">{dr_params["gravity"]}</div></div>' +
+            '</div>' +
+            '<div style="color:#445566;font-family:Courier New;font-size:0.58em;text-align:center;margin-bottom:4px;">' +
+            '🔀 DOMAIN RANDOMIZATION — physics randomized per episode for sim2real robustness</div>',
+            unsafe_allow_html=True)
+
     banner_ph = st.empty()
     banner_ph.markdown('<div class="bn ba">🛫 ADVERSARY DRONE LAUNCHED FROM IRAN</div>',
                        unsafe_allow_html=True)
@@ -626,9 +728,6 @@ if launch:
     # Pipeline
     st.markdown("---")
     pipe_ph = st.empty()
-
-    # Domain Randomization panel
-    dr_ph = st.empty()
 
     # --- Determine map update schedule ---
     phase_frames = [0]
@@ -686,24 +785,6 @@ if launch:
         with pipe_ph.container():
             render_pipeline(f["pn"])
 
-        # Domain Randomization panel
-        if dr_params:
-            dr_ph.markdown(
-                '<div style="margin-top:8px;">' +
-                '<div class="sh">🔀 DOMAIN RANDOMIZATION — Sim2Real Transfer</div>' +
-                '<div style="color:#557788;font-family:Courier New;font-size:0.65em;margin-bottom:6px;">' +
-                'Physics parameters randomized each episode so the RL policy generalizes to the real world.</div>' +
-                '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Mass</div><div class="mv">{dr_params["drone_mass"]} kg</div><div style="color:#334455;font-size:0.6em">nominal: 1.0</div></div>' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Thrust</div><div class="mv">{dr_params["max_force"]} N</div><div style="color:#334455;font-size:0.6em">nominal: 5.0</div></div>' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Drag</div><div class="mv">{dr_params["drag_coeff"]}</div><div style="color:#334455;font-size:0.6em">nominal: 0.3</div></div>' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Evader Spd</div><div class="mv">{dr_params["evader_speed"]} m/s</div><div style="color:#334455;font-size:0.6em">nominal: 2.0</div></div>' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Obstacles</div><div class="mv">{dr_params["num_obstacles"]}</div><div style="color:#334455;font-size:0.6em">nominal: 5</div></div>' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Sensor Noise</div><div class="mv">σ={dr_params["obs_noise_std"]}</div><div style="color:#334455;font-size:0.6em">nominal: 0</div></div>' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Action Delay</div><div class="mv">{dr_params["action_delay"]} steps</div><div style="color:#334455;font-size:0.6em">nominal: 0</div></div>' +
-                f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Gravity</div><div class="mv">{dr_params["gravity"]} m/s²</div><div style="color:#334455;font-size:0.6em">nominal: 9.81</div></div>' +
-                '</div></div>', unsafe_allow_html=True)
-
         time.sleep(delay)
 
 else:
@@ -760,18 +841,16 @@ else:
     if dr_enabled:
         dr_params_standby = generate_domain_rand(seed=int(seed))
         st.markdown(
-            '<div style="margin-top:8px;">' +
-            '<div class="sh">🔀 DOMAIN RANDOMIZATION — Sim2Real Transfer</div>' +
-            '<div style="color:#557788;font-family:Courier New;font-size:0.65em;margin-bottom:6px;">' +
-            'Physics parameters randomized each episode so the RL policy generalizes to the real world. '
-            'Each seed samples different conditions. Toggle off in sidebar to use nominal values.</div>' +
-            '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Mass</div><div class="mv">{dr_params_standby["drone_mass"]} kg</div><div style="color:#334455;font-size:0.6em">nominal: 1.0</div></div>' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Thrust</div><div class="mv">{dr_params_standby["max_force"]} N</div><div style="color:#334455;font-size:0.6em">nominal: 5.0</div></div>' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Drag</div><div class="mv">{dr_params_standby["drag_coeff"]}</div><div style="color:#334455;font-size:0.6em">nominal: 0.3</div></div>' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Evader Spd</div><div class="mv">{dr_params_standby["evader_speed"]} m/s</div><div style="color:#334455;font-size:0.6em">nominal: 2.0</div></div>' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Obstacles</div><div class="mv">{dr_params_standby["num_obstacles"]}</div><div style="color:#334455;font-size:0.6em">nominal: 5</div></div>' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Sensor Noise</div><div class="mv">σ={dr_params_standby["obs_noise_std"]}</div><div style="color:#334455;font-size:0.6em">nominal: 0</div></div>' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Action Delay</div><div class="mv">{dr_params_standby["action_delay"]} steps</div><div style="color:#334455;font-size:0.6em">nominal: 0</div></div>' +
-            f'<div class="mb" style="flex:1;min-width:100px"><div class="ml2">Gravity</div><div class="mv">{dr_params_standby["gravity"]} m/s²</div><div style="color:#334455;font-size:0.6em">nominal: 9.81</div></div>' +
-            '</div></div>', unsafe_allow_html=True)
+            '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Mass</div><div class="mv" style="font-size:1em">{dr_params_standby["drone_mass"]}kg</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Thrust</div><div class="mv" style="font-size:1em">{dr_params_standby["max_force"]}N</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Drag</div><div class="mv" style="font-size:1em">{dr_params_standby["drag_coeff"]}</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Evader</div><div class="mv" style="font-size:1em">{dr_params_standby["evader_speed"]}m/s</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Obstacles</div><div class="mv" style="font-size:1em">{dr_params_standby["num_obstacles"]}</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Noise</div><div class="mv" style="font-size:1em">σ{dr_params_standby["obs_noise_std"]}</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Delay</div><div class="mv" style="font-size:1em">{dr_params_standby["action_delay"]}step</div></div>' +
+            f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Gravity</div><div class="mv" style="font-size:1em">{dr_params_standby["gravity"]}</div></div>' +
+            '</div>' +
+            '<div style="color:#445566;font-family:Courier New;font-size:0.58em;text-align:center;margin-top:4px;">' +
+            '🔀 DOMAIN RANDOMIZATION — physics randomized per episode for sim2real robustness (seed: ' + str(int(seed)) + ')</div>',
+            unsafe_allow_html=True)
