@@ -1,10 +1,7 @@
 """Domain randomization for sim2real transfer.
 
-Randomizes physics parameters across episodes so policies generalize to real-world
-conditions. Reference: Tobin et al. (2017); OpenAI's Rubik's Cube work.
-
-The trick: if you train across a wide range of conditions, reality becomes just
-another sample from that distribution.
+Randomizes physics parameters across episodes so trained policies work on
+real hardware. Reference: Tobin et al. (2017); OpenAI's Rubik's Cube work.
 """
 
 import numpy as np
@@ -12,14 +9,14 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Optional, Dict, Any, Tuple
 from collections import deque
+from core.drone_env import DroneInterceptionEnv
 
 
 class DomainRandomizationWrapper(gym.Wrapper):
-    """Randomize physics parameters at episode reset for robustness.
+    """Randomize physics parameters at episode reset for sim2real robustness.
     
-    Policies trained on only nominal parameters fail when reality doesn't match.
-    This wrapper forces generalization across manufacturing tolerance, battery state,
-    wind, sensor noise, and hardware latency—all real-world variables.
+    Variability: manufacturing tolerance, battery degradation, wind, sensor noise, latency.
+    Training across this range helps policies transfer to real hardware.
     """
 
     def __init__(
@@ -73,7 +70,7 @@ class DomainRandomizationWrapper(gym.Wrapper):
 
         self.randomization_log = {}
 
-        # Mass: manufacturing tolerance + payload variation; affects inertia/maneuverability
+        # Mass: manufacturing tolerance, payload variation
         if self.randomize_mass:
             mass = rng.uniform(0.7, 1.5)
             self.env.unwrapped.drone_mass = mass
@@ -85,32 +82,32 @@ class DomainRandomizationWrapper(gym.Wrapper):
             self.env.unwrapped.max_force = force
             self.randomization_log["max_force"] = force
 
-        # Drag: wind is the dominant environmental factor, plus altitude variation
+        # Drag: wind, air density changes
         if self.randomize_drag:
             drag = rng.uniform(0.1, 0.6)
             self.env.unwrapped.drag_coeff = drag
             self.randomization_log["drag_coefficient"] = drag
 
-        # Evader speed: different drone types (hobby vs. racing) have vastly different capabilities
+        # Evader speed: different drone types have different speeds
         if self.randomize_evader:
             speed = rng.uniform(1.0, 3.5)
             self.env.unwrapped.evader_speed = speed
             self.randomization_log["evader_speed"] = speed
 
-        # Obstacle count: open fields vs. dense urban; policy must handle both
+        # Obstacle count: environmental complexity varies
         if self.randomize_obstacles:
             num_obs = rng.randint(2, 9)  # [2, 8] inclusive
             self.env.unwrapped.num_obstacles = int(num_obs)
             self.randomization_log["num_obstacles"] = int(num_obs)
 
-        # Observation noise: models real sensor drift and measurement error
+        # Sensor noise: measurement error
         if self.randomize_obs_noise:
             self._obs_noise_std = rng.uniform(0, 0.05)
             self.randomization_log["obs_noise_std"] = self._obs_noise_std
         else:
             self._obs_noise_std = 0.0
 
-        # Action delay: motor controller lag + onboard inference latency (~10-50ms in reality)
+        # Action delay: motor lag, compute latency
         if self.randomize_action_delay:
             self._action_delay_steps = rng.randint(0, 4)  # [0, 3] inclusive
             self._action_buffer = deque(maxlen=max(self._action_delay_steps + 1, 1))
@@ -122,7 +119,7 @@ class DomainRandomizationWrapper(gym.Wrapper):
             self._action_delay_steps = 0
             self._action_buffer = deque(maxlen=1)
 
-        # Gravity: altitude/latitude variation; small effect but helps robustness
+        # Gravity: variation with altitude/latitude
         if self.randomize_gravity:
             gravity = rng.uniform(9.75, 9.85)
             self.env.unwrapped.gravity = gravity
@@ -194,38 +191,27 @@ class DomainRandomizationWrapper(gym.Wrapper):
 
 
 if __name__ == "__main__":
-    from core.drone_env import DroneInterceptionEnv
-
-    print("=" * 60)
-    print("Domain Randomization Wrapper — Sanity Test")
-    print("=" * 60)
-
     base_env = DroneInterceptionEnv(render_mode=None)
     env = DomainRandomizationWrapper(base_env)
 
-    # Run 5 episodes with randomization
     for ep in range(5):
         obs, info = env.reset(seed=ep)
         rand_log = info.get("domain_randomization", {})
-        print(f"\nEpisode {ep + 1} randomization:")
+        print(f"Episode {ep + 1}:")
         for param, value in rand_log.items():
-            print(f"  {param:25s}: {value:.4f}" if isinstance(value, float)
-                  else f"  {param:25s}: {value}")
+            fmt = f"{value:.4f}" if isinstance(value, float) else f"{value}"
+            print(f"  {param}: {fmt}")
 
-        # Run a few steps
         for _ in range(10):
             action = env.action_space.sample()
             obs, reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
                 break
 
-    # Print summary statistics
     summary = env.get_randomization_summary()
-    print("\n\nRandomization Summary (over 5 episodes):")
+    print("\nSummary (5 episodes):")
     for param, stats in summary.items():
-        print(f"  {param:25s}: mean={stats['mean']:.3f}, "
-              f"std={stats['std']:.3f}, "
+        print(f"  {param}: mean={stats['mean']:.3f}, std={stats['std']:.3f}, "
               f"range=[{stats['min']:.3f}, {stats['max']:.3f}]")
 
-    print("\n✓ Domain randomization test passed!")
     env.close()

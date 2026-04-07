@@ -1,9 +1,7 @@
 """Cost-aware reward optimization for drone interception.
 
-Maps RL rewards to approximate real-world dollar costs, training for
-COST PER INTERCEPTION rather than success rate alone.
-
-Key insight: 80% catch at $300/shot beats 95% at $3M/shot. Economics matter.
+Maps RL rewards to real-world dollar costs, trains for cost-per-interception
+rather than success rate alone.
 """
 
 import numpy as np
@@ -61,7 +59,7 @@ class CostAwareReward:
         self.episode_total_thrust = 0.0
 
     def reset(self) -> None:
-        """Reset cost tracking for a new episode. Call at env.reset()."""
+        """Reset cost tracking for a new episode."""
         self._reset_tracking()
 
     def compute(
@@ -78,7 +76,7 @@ class CostAwareReward:
         self.episode_steps += 1
         reward = 0.0
 
-        # Progress reward — scaled for RL signal alongside cost penalties
+        # Progress toward target
         progress = (prev_distance - distance) * 10.0
         reward += progress
 
@@ -89,16 +87,16 @@ class CostAwareReward:
         self.episode_energy_cost += energy_cost
         reward -= energy_cost * 100.0  # Scale to RL magnitude
 
-        # Time cost — opportunity cost of extended pursuit
+        # Time cost accumulation
         self.episode_time_cost += self.time_cost
         reward -= 0.1
 
-        # Interception bonus — strong signal for mission success
+        # Success bonus
         if info.get("intercepted", False):
             self.episode_intercepted = True
             reward += 100.0
 
-        # Collision penalty — total drone + mission loss
+        # Crash penalty
         if info.get("collision", False):
             self.episode_collision_cost = self.collision_cost
             reward -= 50.0
@@ -114,14 +112,14 @@ class CostAwareReward:
         return float(reward)
 
     def get_episode_summary(self) -> Dict[str, float]:
-        """Return cost breakdown including cost-per-interception metric."""
-        # Hardware amortization: lost drones cost full replacement, others amortized
+        """Return cost breakdown for the episode."""
+        # Hardware: destroyed = full cost, otherwise amortized over fleet
         if self.episode_collision_cost > 0:
             hardware_cost = self.drone_cost  # Destroyed — full replacement
         else:
             hardware_cost = self.drone_cost / 100.0  # Amortized over fleet lifetime
 
-        # Total mission cost accumulation
+        # Total mission cost
         total_cost = (
             hardware_cost
             + self.episode_energy_cost
@@ -130,12 +128,10 @@ class CostAwareReward:
             + TRAINING_COST_AMORTIZED
         )
 
-        # Cost per interception: what we spent to achieve this outcome
-        # Both success and failure incur costs; this shows the efficiency
+        # Cost per interception: what we paid for this outcome
         if self.episode_intercepted:
             cost_per_interception = total_cost
         else:
-            # Mission failed — cost is incurred with no interception
             cost_per_interception = total_cost
 
         return {
@@ -160,7 +156,7 @@ class CostAwareReward:
         avg_time_cost: float = 150.0,
         drone_loss_rate: float = 0.05,
     ) -> Dict[str, float]:
-        """Project annual fleet operating costs; useful for deployment planning."""
+        """Project annual fleet costs."""
         annual_missions = missions_per_month * 12
         successful_interceptions = annual_missions * success_rate
 
@@ -172,10 +168,10 @@ class CostAwareReward:
         energy_cost = annual_missions * avg_energy_cost
         time_cost = annual_missions * avg_time_cost
 
-        # Initial fleet purchase; assumes conservative 5-drone buffer for ops availability
+        # Initial fleet purchase
         initial_fleet = 5 * drone_hardware_cost
 
-        # Total cost divided by successful outcomes — the economic efficiency metric
+        # Cost per successful interception
         annual_cost = initial_fleet + replacement_cost + energy_cost + time_cost
         cost_per_successful_interception = (
             annual_cost / max(successful_interceptions, 1)
@@ -238,33 +234,25 @@ COUNTER_UAS_COSTS = {
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("Cost-Aware Reward — Sanity Test")
-    print("=" * 60)
-
     cost_reward = CostAwareReward()
     cost_reward.reset()
 
-    # Simulate a successful 100-step episode
+    # Simulate a 100-step episode
     for step in range(100):
         action = np.random.uniform(-1, 1, size=3)
         distance = max(0.5, 10.0 - step * 0.1)
         prev_distance = 10.0 - (step - 1) * 0.1 if step > 0 else 10.0
         info = {"intercepted": step == 99, "collision": False, "out_of_bounds": False}
-        reward = cost_reward.compute(action, distance, prev_distance, info)
+        cost_reward.compute(action, distance, prev_distance, info)
 
     summary = cost_reward.get_episode_summary()
-    print("\nEpisode Cost Breakdown:")
+    print("Cost breakdown:")
     for key, value in summary.items():
         if isinstance(value, float):
-            print(f"  {key:30s}: ${value:.2f}")
+            print(f"  {key}: ${value:.2f}")
         else:
-            print(f"  {key:30s}: {value}")
+            print(f"  {key}: {value}")
 
-    print("\n\nCounter-UAS Cost Comparison:")
-    print(f"  {'Method':<25s} {'$/Interception':>15s}")
-    print(f"  {'-'*25} {'-'*15}")
+    print("\nCounter-UAS cost comparison:")
     for method, data in COUNTER_UAS_COSTS.items():
-        print(f"  {method:<25s} ${data['cost_per_interception']:>13,.0f}")
-
-    print("\n✓ Cost-aware reward test passed!")
+        print(f"  {method:<30s} ${data['cost_per_interception']:>10,.0f}/interception")
