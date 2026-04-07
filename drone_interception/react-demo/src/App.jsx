@@ -9,7 +9,7 @@ import Pipeline from './components/Pipeline';
 import InterceptionScene from './components/InterceptionScene';
 import { generateScenario, generateDomainRand, AIRBASES } from './scenario';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 const SPEED_DELAY = { SLOW: 220, NORMAL: 80, FAST: 20 };
 
