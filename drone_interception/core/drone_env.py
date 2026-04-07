@@ -69,7 +69,8 @@ DT = 1.0 / 60.0          # Timestep — 60Hz physics, matching real flight contr
 GRAVITY = 9.81            # m/s^2 — standard gravity (can be randomized for sim2real)
 
 # Raycast directions for obstacle detection — 5 rays from interceptor
-# These simulate cheap ultrasonic/IR proximity sensors on a real drone
+# These simulate obstacle proximity sensing — in deployment, estimated from
+# base-station camera depth perception or pre-loaded 3D terrain maps
 RAY_DIRECTIONS = [
     np.array([1, 0, 0], dtype=np.float64),    # Forward
     np.array([-1, 0, 0], dtype=np.float64),   # Backward
@@ -739,10 +740,12 @@ class DroneInterceptionEnv(gym.Env):
         - Relative geometry (direction and distance to target)
         - Obstacle proximity (5 raycasts for spatial awareness)
 
-        In real deployment, these would come from:
-        - Onboard IMU + barometer → own position/velocity
-        - Onboard camera + tracking → target position/velocity
-        - Ultrasonic/IR sensors → obstacle proximity
+        In real deployment, all sensing and computation happens at the base station:
+        - Drone telemetry (position/velocity) sent to base via radio link
+        - PTZ camera + YOLOv8 at the base → target position/velocity
+        - Obstacle proximity estimated from base camera depth or pre-loaded 3D terrain maps
+        - PPO policy runs on Jetson at the base, outputs thrust commands back to the drone
+        - The drone itself is a reusable dumb airframe — motors, flight controller, radio, battery
 
         Returns:
             21-dim numpy array (float32).

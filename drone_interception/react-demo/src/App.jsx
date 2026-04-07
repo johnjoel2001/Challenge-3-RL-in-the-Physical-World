@@ -6,6 +6,7 @@ import MapView from './components/MapView';
 import YoloPanel from './components/YoloPanel';
 import DetectionLog from './components/DetectionLog';
 import Pipeline from './components/Pipeline';
+import InterceptionScene from './components/InterceptionScene';
 import { generateScenario, generateDomainRand, AIRBASES } from './scenario';
 
 const API_URL = 'http://localhost:8000';
@@ -25,6 +26,7 @@ export default function App() {
   const [logEntries, setLogEntries] = useState([]);
   const [banner, setBanner] = useState(null);
   const [drParams, setDrParams] = useState(null);
+  const [show3D, setShow3D] = useState(false);
 
   const cancelRef = useRef(false);
 
@@ -105,7 +107,26 @@ export default function App() {
 
       <div className="main-content">
         {/* Header */}
-        <div className="header-title">COUNTER-UAS COMMAND CENTER</div>
+        <div className="header-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>COUNTER-UAS COMMAND CENTER</span>
+          <button
+            onClick={() => setShow3D(true)}
+            style={{
+              background: 'linear-gradient(135deg, #00cc66, #009944)',
+              color: '#fff',
+              border: 'none',
+              padding: '6px 14px',
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+              fontWeight: 'bold',
+              fontSize: 11,
+              letterSpacing: 1,
+              borderRadius: 3,
+            }}
+          >
+            3D INTERCEPTION VIEW
+          </button>
+        </div>
 
         {/* Scenario line */}
         {scenario ? (
@@ -169,6 +190,19 @@ export default function App() {
         {/* Pipeline */}
         <Pipeline activeStage={frame ? frame.pn : 0} />
       </div>
+
+      {/* 3D Interception Modal */}
+      <InterceptionScene
+        visible={show3D}
+        onClose={() => setShow3D(false)}
+        frames={scenario ? scenario.frames : []}
+        currentIdx={currentIdx}
+        baseName={baseName}
+        iranLabel={scenario ? scenario.iranLabel : ''}
+        iranLat={scenario ? scenario.iranLat : null}
+        iranLon={scenario ? scenario.iranLon : null}
+        speed={speed}
+      />
     </div>
   );
 }

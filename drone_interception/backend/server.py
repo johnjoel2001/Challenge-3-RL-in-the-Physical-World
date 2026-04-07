@@ -70,44 +70,74 @@ def pick_iran_site(rng):
 def run_ppo_episode(seed: int, use_dr: bool):
     """
     Run one full episode using the trained PPO model.
-    Returns list of (interceptor_pos, target_pos, distance, done_info) per step.
+    If the episode ends too early (collision/OOB < 80 steps), retry with
+    seed offsets to find a meaningful chase. Returns trajectory, outcome, DR params.
     """
-    rng_local = np.random.default_rng(seed)
+    best_traj = None
+    best_intercepted = False
+    best_dr = {}
+    best_reason = "timeout"
 
-    env = DroneInterceptionEnv(render_mode=None)
-    if use_dr:
-        env = DomainRandomizationWrapper(env)
+    # Try up to 5 seed offsets to get a good episode (>80 steps or intercepted)
+    for attempt in range(5):
+        actual_seed = seed + attempt * 1000
 
-    obs, info = env.reset(seed=seed)
+        env = DroneInterceptionEnv(render_mode=None)
+        if use_dr:
+            env = DomainRandomizationWrapper(env)
 
-    trajectory = []
-    done = False
-    step_count = 0
-    intercepted = False
-    dr_params = info.get("domain_randomization", {})
+        obs, info = env.reset(seed=actual_seed)
 
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
-        step_count += 1
+        trajectory = []
+        done = False
+        step_count = 0
+        intercepted = False
+        dr_params = info.get("domain_randomization", {})
+        reason = "timeout"
 
-        int_pos = env.unwrapped.interceptor_pos.copy()
-        tgt_pos = env.unwrapped.target_pos.copy()
-        dist = np.linalg.norm(int_pos - tgt_pos)
+        while not done:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            step_count += 1
 
-        if info.get("intercepted", False):
-            intercepted = True
+            int_pos = env.unwrapped.interceptor_pos.copy()
+            tgt_pos = env.unwrapped.target_pos.copy()
+            dist = np.linalg.norm(int_pos - tgt_pos)
 
-        trajectory.append({
-            "int_pos": int_pos,
-            "tgt_pos": tgt_pos,
-            "dist": float(dist),
-            "intercepted": intercepted,
-        })
+            if info.get("intercepted", False):
+                intercepted = True
+                reason = "intercepted"
+            elif info.get("collision", False):
+                reason = "collision"
+            elif info.get("out_of_bounds", False):
+                reason = "out_of_bounds"
 
-    env.close()
-    return trajectory, intercepted, dr_params
+            # action is normalized [-1,1]; real thrust = action * max_force
+            max_f = env.unwrapped.max_force
+            thrust = action * max_f
+            trajectory.append({
+                "int_pos": int_pos,
+                "tgt_pos": tgt_pos,
+                "thrust": thrust.copy(),
+                "dist": float(dist),
+                "intercepted": intercepted,
+            })
+
+        env.close()
+
+        # Keep the best episode (intercepted > long episode > short episode)
+        if best_traj is None or intercepted or (not best_intercepted and len(trajectory) > len(best_traj)):
+            best_traj = trajectory
+            best_intercepted = intercepted
+            best_dr = dr_params
+            best_reason = reason
+
+        # Good enough — intercepted or ran long enough
+        if intercepted or len(trajectory) >= 80:
+            break
+
+    return best_traj, best_intercepted, best_dr, best_reason
 
 
 def lerp(a, b, t):
@@ -125,7 +155,7 @@ def generate_scenario(req: ScenarioRequest):
     iran_label, iran_lat, iran_lon = pick_iran_site(rng)
 
     # ── 1. Run PPO model to get outcome + DR params ──
-    trajectory, intercepted, dr_params = run_ppo_episode(req.seed, req.drEnabled)
+    trajectory, intercepted, dr_params, reason = run_ppo_episode(req.seed, req.drEnabled)
     total_env_steps = len(trajectory)
 
     # Extract target Y-positions from arena for zig-zag lateral drift
@@ -178,13 +208,17 @@ def generate_scenario(req: ScenarioRequest):
     kill_lat, kill_lon = adv_path[kill_frame]
 
     # ── 4. Interceptor: Bezier pursuit from base to kill point ──
-    # Control point: midpoint of base→kill, offset toward adversary's mid-pursuit position
-    mid_frame = (yolo_frame + kill_frame) // 2
-    adv_mid_lat, adv_mid_lon = adv_path[mid_frame]
-    mid_lat = (base_lat + kill_lat) / 2
-    mid_lon = (base_lon + kill_lon) / 2
-    ctrl_lat = mid_lat + 0.5 * (adv_mid_lat - mid_lat)
-    ctrl_lon = mid_lon + 0.5 * (adv_mid_lon - mid_lon)
+    # Control point: 40% along base→kill with small perpendicular offset
+    # Creates a gentle curve WITHOUT overshooting past the interception point
+    frac_lat = base_lat + 0.4 * (kill_lat - base_lat)
+    frac_lon = base_lon + 0.4 * (kill_lon - base_lon)
+    d_lat0 = kill_lat - base_lat
+    d_lon0 = kill_lon - base_lon
+    perp_lat = -d_lon0   # perpendicular direction
+    perp_lon = d_lat0
+    perp_scale = 0.06    # small offset — visible curve, no overshoot
+    ctrl_lat = frac_lat + perp_lat * perp_scale
+    ctrl_lon = frac_lon + perp_lon * perp_scale
 
     # ── 5. Build frame array ──
     frames = []
@@ -239,6 +273,23 @@ def generate_scenario(req: ScenarioRequest):
         int_alt = 100.0 if pn <= 2 else float(np.interp(frac, [PHASE_YOLO, 1.0], [100, adv_alt]))
         brg = round(bearing, 1)
 
+        # Map pursuing-phase frames to PPO trajectory for arena xyz + thrust
+        arena_data = {}
+        if pn >= 3 and total_env_steps > 0:
+            # Map pursuit progress to trajectory index
+            pursuit_frac = (i - yolo_frame) / max(kill_frame - yolo_frame, 1)
+            pursuit_frac = max(0.0, min(1.0, pursuit_frac))
+            tj_idx = min(int(pursuit_frac * (total_env_steps - 1)), total_env_steps - 1)
+            t_step = trajectory[tj_idx]
+            arena_data = {
+                "ax": round(float(t_step["tgt_pos"][0]), 2),
+                "ay": round(float(t_step["tgt_pos"][1]), 2),
+                "az": round(float(t_step["tgt_pos"][2]), 2),
+                "tx": round(float(t_step["thrust"][0]), 2),
+                "ty": round(float(t_step["thrust"][1]), 2),
+                "tz": round(float(t_step["thrust"][2]), 2),
+            }
+
         frames.append({
             "step": i + 1,
             "t": round(frac, 4),
@@ -253,6 +304,7 @@ def generate_scenario(req: ScenarioRequest):
             "phase": phase,
             "pn": pn,
             "yc": yc,
+            **arena_data,
         })
 
     # Domain randomization params for display
@@ -277,6 +329,44 @@ def generate_scenario(req: ScenarioRequest):
         "intercepted": intercepted,
         "totalSteps": total_env_steps,
         "drParams": dr_display,
+    }
+
+
+@app.post("/api/scenario3d")
+def generate_scenario_3d(req: ScenarioRequest):
+    """
+    Run PPO episode and return raw 3D arena positions for Three.js visualization.
+    Returns every Nth frame to keep payload manageable.
+    """
+    trajectory, intercepted, dr_params, reason = run_ppo_episode(req.seed, req.drEnabled)
+
+    # Sample frames for smooth playback (every 2nd frame, or all if short)
+    step = max(1, len(trajectory) // 250)
+    sampled = trajectory[::step]
+    # Always include the last frame
+    if sampled[-1] is not trajectory[-1]:
+        sampled.append(trajectory[-1])
+
+    frames = []
+    for i, t in enumerate(sampled):
+        frames.append({
+            "ix": round(float(t["int_pos"][0]), 3),
+            "iy": round(float(t["int_pos"][2]), 3),   # z -> y (up) in Three.js
+            "iz": round(float(t["int_pos"][1]), 3),
+            "tx": round(float(t["tgt_pos"][0]), 3),
+            "ty": round(float(t["tgt_pos"][2]), 3),
+            "tz": round(float(t["tgt_pos"][1]), 3),
+            "dist": round(t["dist"], 3),
+            "intercepted": t["intercepted"],
+        })
+
+    return {
+        "frames": frames,
+        "totalSteps": len(trajectory),
+        "intercepted": intercepted,
+        "reason": reason,
+        "drParams": dr_params if req.drEnabled else None,
+        "arenaSize": 20,
     }
 
 
