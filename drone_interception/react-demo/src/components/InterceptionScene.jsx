@@ -219,9 +219,9 @@ export default function InterceptionScene({ visible, onClose, frames, currentIdx
 
       {/* Legend */}
       <div style={{ position:'absolute', bottom:16, left:16, background:'#0d1117cc', padding:'10px 14px', ...mono, fontSize:11, color:'#ccc', border:'1px solid #333', lineHeight:1.9 }}>
-        <div><span style={{color:'#00cc66'}}>&#9632;</span> Interceptor (PPO)</div>
-        <div><span style={{color:'#ff2222'}}>&#9632;</span> Adversary</div>
-        <div><span style={{color:'#f5f5dc'}}>&#9632;</span> Net capture</div>
+        <div><span style={{color:'#00cc66'}}>[●]</span> Interceptor (PPO)</div>
+        <div><span style={{color:'#ff2222'}}>[●]</span> Adversary</div>
+        <div><span style={{color:'#f5f5dc'}}>[●]</span> Net capture</div>
         <div><span style={{color:'#ffaa00'}}>—</span> Distance</div>
         <div style={{ marginTop:4, color:'#555' }}>Drag to rotate · Scroll to zoom · ESC close</div>
       </div>

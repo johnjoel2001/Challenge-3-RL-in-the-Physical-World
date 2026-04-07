@@ -173,7 +173,7 @@ export default function App() {
               <YoloPanel frame={frame} />
             ) : (
               <div className="camera-offline">
-                <div className="camera-offline-icon">&#9678;</div>
+                <div className="camera-offline-icon">●</div>
                 <div className="camera-offline-text">CAMERA OFFLINE</div>
                 <div className="camera-offline-sub">
                   PTZ camera activates when RF detects a signal.<br />

@@ -34,7 +34,7 @@ export default function Sidebar({
           value={seed}
           onChange={e => setSeed(+e.target.value || 0)}
         />
-        <button onClick={randomSeed} title="Random seed">&#x21BB;</button>
+        <button onClick={randomSeed} title="Random seed">RAND</button>
       </div>
 
       <div className="sidebar-label">PLAYBACK SPEED</div>
