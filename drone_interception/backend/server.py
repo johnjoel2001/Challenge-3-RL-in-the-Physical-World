@@ -43,7 +43,7 @@ AIRBASES = {
 
 # ── Phase thresholds (fraction of episode steps) ──
 PHASE_RF_FRAC = 0.50
-PHASE_YOLO_FRAC = 0.72
+PHASE_YOLO_FRAC = 0.55
 
 # ── FastAPI app ──
 app = FastAPI(title="Counter-UAS PPO Backend")
@@ -136,9 +136,9 @@ def generate_scenario(req: ScenarioRequest):
     # Use a fixed number of display frames for smooth playback
     N = max(total_env_steps, 150)
     PHASE_RF = 0.50 + rng.uniform(-0.08, 0.05)
-    PHASE_YOLO = 0.72 + rng.uniform(-0.05, 0.05)
-    # Kill at ~85% of the journey — well before reaching base
-    PHASE_KILL = 0.85 + rng.uniform(-0.03, 0.03)
+    PHASE_YOLO = 0.55 + rng.uniform(-0.03, 0.03)
+    # Kill at ~90% of the journey — well before reaching base
+    PHASE_KILL = 0.90 + rng.uniform(-0.03, 0.03)
 
     rf_frame = int(PHASE_RF * (N - 1))
     yolo_frame = int(PHASE_YOLO * (N - 1))

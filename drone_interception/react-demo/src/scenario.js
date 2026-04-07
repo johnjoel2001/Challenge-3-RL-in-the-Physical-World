@@ -22,8 +22,8 @@ export const AIRBASES = {
 };
 
 const PHASE_RF = 0.50;
-const PHASE_YOLO = 0.72;
-const PHASE_KILL = 0.96;
+const PHASE_YOLO = 0.55;
+const PHASE_KILL = 0.92;
 export const TOTAL_FRAMES = 150;
 
 function lerp(a, b, t) {
