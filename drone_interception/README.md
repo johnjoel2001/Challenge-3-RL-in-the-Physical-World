@@ -13,13 +13,13 @@
 
 ## Table of Contents
 
-1. [Operational Context: The 2026 US-Iran Drone War](#operational-context-the-2026-us-iran-drone-war)
+1. [Operational Context: The Modern Drone Threat](#operational-context-the-modern-drone-threat)
 2. [The Problem: Asymmetric Cost](#the-problem-asymmetric-cost)
 3. [Our Solution](#our-solution)
 4. [System Architecture](#system-architecture)
 5. [Environment Design](#environment-design)
 6. [Reward Structure](#reward-structure)
-7. [RL Algorithms: PPO vs SAC vs TD3](#rl-algorithms-ppo-vs-sac-vs-td3)
+7. [RL Algorithm: PPO](#rl-algorithm-ppo)
 8. [Domain Randomization & Sim2Real](#domain-randomization--sim2real)
 9. [Training & Results](#training--results)
 10. [Live Demo: Command Center](#live-demo-command-center)
@@ -32,34 +32,34 @@
 
 ---
 
-## Operational Context: The 2026 US-Iran Drone War
+## Operational Context: The Modern Drone Threat
 
-The ongoing US-Iran conflict of 2026 has become the **world's first full-scale drone war**. Iranian UAS swarms strike US bases across the Persian Gulf daily, and the US is hemorrhaging money defending against them.
+Low-cost drone warfare has become the **defining military challenge of the 2020s**. Adversary UAS swarms now threaten forward-operating bases globally, and defenders are hemorrhaging money on legacy interceptors.
 
 ### The Escalation
 
 | Date | Event | Impact |
 |------|-------|--------|
-| **Sep 2019** | Abqaiq-Khurais attack (Saudi Aramco) | 18 Iranian drones cause **$2B damage**, bypass US Patriot batteries |
-| **Jan 2024** | Tower 22, Jordan | **3 US soldiers killed** by a $2,000 drone that mimicked a returning US drone's flight path |
-| **Apr 2024** | Iran's direct strike on Israel | 170 drones + 150 missiles; US/allies intercept at a cost of **$1.35B in one night** |
-| **2024-25** | Houthi Red Sea campaign | USS Carney fires **$2M SM-2 missiles** at $2K hobby-grade drones |
-| **Early 2026** | Full-scale US-Iran hostilities | Mass Shahed-136 swarms against all US Gulf bases; **hundreds produced per month** |
-| **Now 2026** | Drone attrition crisis | US expends **$4.2B on drone defense** in 2026; Patriot stockpiles depleting faster than Lockheed can manufacture |
+| **Sep 2019** | Abqaiq-Khurais oil facility attack | 18 low-cost drones cause **$2B damage**, bypass Patriot batteries |
+| **Jan 2024** | Tower 22, Jordan | **3 soldiers killed** by a $2,000 drone that mimicked a returning friendly drone's flight path |
+| **Apr 2024** | Large-scale drone + missile barrage | 170 drones + 150 missiles; defenders intercept at a cost of **$1.35B in one night** |
+| **2024-25** | Red Sea drone campaign | Navy fires **$2M SM-2 missiles** at $2K hobby-grade drones |
+| **2025-26** | Mass-produced swarm attacks | Cheap loitering munitions target forward bases; **hundreds produced per month** |
+| **Present** | Drone attrition crisis | Billions spent on drone defense; interceptor stockpiles depleting faster than manufacturers can produce |
 
-### US Bases Under Daily Drone Attack
+### Threatened Forward-Operating Bases
 
-| Base | Country | Threat Level |
-|------|---------|-------------|
-| Al Dhafra AB | UAE | **CRITICAL** |
-| Camp Arifjan | Kuwait | **CRITICAL** |
-| Al Udeid AB | Qatar | HIGH |
-| Al Asad AB | Iraq | **CRITICAL** |
-| Camp Lemonnier | Djibouti | HIGH |
-| Prince Sultan AB | KSA | HIGH |
+| Base | Region | Threat Level |
+|------|--------|-------------|
+| Al Dhafra AB | Persian Gulf | **CRITICAL** |
+| Camp Arifjan | Persian Gulf | **CRITICAL** |
+| Al Udeid AB | Persian Gulf | HIGH |
+| Al Asad AB | Middle East | **CRITICAL** |
+| Camp Lemonnier | East Africa | HIGH |
+| Prince Sultan AB | Middle East | HIGH |
 
 > *"We cannot afford to defend against cheap drones with expensive missiles."*
-> — Pentagon, 2026
+> — Defense officials
 
 ---
 
@@ -75,11 +75,11 @@ Counter-drone defense costs are **1,000-10,000x** the cost of the threats they n
 | **COYOTE (Raytheon)** | **$80,000** | Small UAS | Semi | No |
 | **Our System** | **$6,400 total / $300 per intercept** | Small UAS, hobby drones | **Yes (fully)** | **Yes** |
 
-**The 2026 Cost Crisis:**
-- Iran's Shahed-136: **$20,000** per drone (mass-produced)
-- US Patriot PAC-3: **$3,000,000** per intercept
-- Daily attacks: **15-40 drones** per wave
-- US burn rate: **$45M-$120M per day** on drone defense
+**The Cost Crisis:**
+- Mass-produced loitering munitions: **$20,000** per drone
+- Patriot PAC-3 interceptor: **$3,000,000** per intercept
+- Daily swarm attacks: **15-40 drones** per wave
+- Defender burn rate: **$45M-$120M per day** on drone defense
 
 **Our interceptor costs less than the drone it's killing — the cost asymmetry is inverted.**
 
@@ -122,7 +122,7 @@ A **4-stage fully autonomous** detection and interception pipeline with **zero h
 
 | Component | Technology |
 |-----------|-----------|
-| RL Training | `Stable-Baselines3` (PPO, SAC, TD3) |
+| RL Training | `Stable-Baselines3` (PPO) |
 | Environment | `Gymnasium` + NumPy physics / PyBullet |
 | Sim2Real | `DomainRandomizationWrapper` (8 randomized params) |
 | Visual Detection | `YOLOv8` |
@@ -149,7 +149,7 @@ A **4-stage fully autonomous** detection and interception pipeline with **zero h
                                    │
                                    v
                    ┌─────────────────────────────────────────────────────┐
-                   │       Stable-Baselines3 (PPO / SAC / TD3)           │
+                   │            Stable-Baselines3 (PPO)                  │
                    │   1M timesteps, 4 parallel envs, ~30 min training   │
                    └───────────────┬─────────────────────────────────────┘
                                    │
@@ -165,7 +165,7 @@ A **4-stage fully autonomous** detection and interception pipeline with **zero h
                                v
                    ┌─────────────────────────────────────────────────────┐
                    │  React Command Center (MapLibre + deck.gl)          │
-                   │  Real-time visualization over Persian Gulf map       │
+                   │  Real-time visualization over regional map            │
                    │  Live PPO inference, domain randomization display    │
                    └─────────────────────────────────────────────────────┘
 ```
@@ -263,11 +263,9 @@ R(s,a) = 15*delta_d + [500 + speed_bonus]_intercept + proximity_bonus
 
 ---
 
-## RL Algorithms: PPO vs SAC vs TD3
+## RL Algorithm: PPO
 
-We compare three fundamentally different RL approaches to demonstrate analytical rigor:
-
-### PPO (Proximal Policy Optimization) — **Primary Algorithm**
+### PPO (Proximal Policy Optimization)
 
 ```bash
 python -m training.train_ppo --timesteps 1000000 --domain-rand
@@ -286,30 +284,7 @@ python -m training.train_ppo --timesteps 1000000 --domain-rand
 | Network | MLP [256, 256] | Runs on Jetson Nano at <10ms |
 | Parallel envs | 4 | More diverse rollouts per update |
 
-**Why PPO wins for this task:** The clipped objective provides stable training with our shaped reward that has sharp discontinuities (+500 for interception, -75 for collision). Off-policy methods can be destabilized by these reward cliffs.
-
-### SAC (Soft Actor-Critic)
-
-```bash
-python -m training.train_sac --timesteps 500000 --domain-rand
-```
-
-- Off-policy with entropy regularization (automatic temperature tuning)
-- Explores diverse pursuit strategies via maximum entropy objective
-- More sample-efficient (replay buffer reuses old experience)
-- Can be less stable with our sharp reward transitions
-
-### TD3 (Twin Delayed DDPG)
-
-```bash
-python -m training.train_td3 --timesteps 500000 --domain-rand
-```
-
-- Deterministic policy with twin critics (reduces Q-value overestimation)
-- Delayed policy updates: update policy every 2 critic steps
-- Target policy smoothing: noise on target actions
-- Most precise trajectories but needs careful exploration noise tuning
-- Ideal for deployment (no sampling at inference time)
+**Why PPO:** The clipped objective provides stable training with our shaped reward that has sharp discontinuities (+500 for interception, -75 for collision). PPO's conservative policy updates prevent catastrophic forgetting and ensure monotonic improvement.
 
 ---
 
@@ -361,21 +336,12 @@ A trained PPO model is included at `models/ppo_interceptor.zip` (1.7 MB):
 | Training time | ~30 min (laptop CPU, no GPU) |
 | Inference time | **<10ms** (Jetson Nano) |
 
-### Algorithm Comparison
-
-| Algorithm | Intercept Rate | Collision Rate | Avg Reward | Avg Steps | $/Interception |
-|-----------|---------------|---------------|-----------|----------|----------------|
-| **PPO** | **Best** | Low | **Highest** | **Shortest** | **~$350-400** |
-| SAC | Competitive | Moderate | Good | Medium | ~$400-450 |
-| TD3 | Good | Higher | Moderate | Longer | ~$400-500 |
-
-PPO consistently outperforms for this task due to stable training with sharp reward cliffs.
 
 ---
 
 ## Live Demo: Command Center
 
-A real-time React-based command center that visualizes PPO model inference over a **Persian Gulf map** with actual geographic coordinates.
+A real-time React-based command center that visualizes PPO model inference over a **regional map** with actual geographic coordinates.
 
 ### Backend (FastAPI + PPO)
 
@@ -385,12 +351,11 @@ python -m uvicorn backend.server:app --reload --port 8000
 ```
 
 - Runs actual PPO model inference per request
-- Maps arena coordinates to Iran → US Base geographic corridor
+- Maps arena coordinates to adversary origin → defender base geographic corridor
 - Returns adversary zig-zag flight path + interceptor Bezier pursuit trajectory
 - Domain randomization parameters included in response
 - Endpoints: `POST /api/scenario` (baseName, seed, drEnabled)
 - Supported bases: Al Dhafra AB (UAE), Camp Arifjan (Kuwait), Prince Sultan AB (KSA)
-- Iran launch sites: Bandar-e Shahid Rajaee, Bushehr, Abadan, Jask, Chabahar
 
 ### Frontend (React + MapLibre GL)
 
@@ -403,7 +368,7 @@ npm run dev    # http://localhost:3000
 **Components:**
 | Component | File | Description |
 |-----------|------|-------------|
-| `MapView` | `src/components/MapView.jsx` | MapLibre GL map with animated drone paths over Persian Gulf |
+| `MapView` | `src/components/MapView.jsx` | MapLibre GL map with animated drone flight paths |
 | `Sidebar` | `src/components/Sidebar.jsx` | Base selection, seed, speed, domain randomization toggle |
 | `Telemetry` | `src/components/Telemetry.jsx` | Real-time distance, altitude, speed readout |
 | `Pipeline` | `src/components/Pipeline.jsx` | 4-stage detection pipeline status (RF → YOLO → RL → Intercept) |
@@ -454,25 +419,17 @@ python -m core.drone_env
 python -m core.domain_randomization
 ```
 
-### 3. Train Models (~15-30 min each, no GPU needed)
+### 3. Train PPO (~30 min, no GPU needed)
 
 ```bash
-# Primary: PPO with domain randomization
 python -m training.train_ppo --timesteps 1000000 --domain-rand --seed 42
-
-# Comparison algorithms
-python -m training.train_sac --timesteps 500000 --seed 42
-python -m training.train_td3 --timesteps 500000 --seed 42
 ```
 
 ### 4. Evaluate
 
 ```bash
-# Single model evaluation (100 episodes)
+# Evaluate model (100 episodes)
 python -m evaluation.evaluate --model models/ppo_interceptor.zip --episodes 100
-
-# Side-by-side comparison (PPO vs SAC vs TD3)
-python -m evaluation.compare_algorithms --episodes 100
 
 # 3D flight path visualization
 python -m evaluation.visualize_3d --episodes 5
@@ -518,8 +475,6 @@ drone_interception/
 ├── training/                           # Algorithm training scripts
 │   ├── __init__.py
 │   ├── train_ppo.py                    # PPO: 4 parallel envs, 2048 rollout, clip=0.2
-│   ├── train_sac.py                    # SAC: replay buffer 100K, auto entropy tuning
-│   ├── train_td3.py                    # TD3: twin critics, delayed policy update
 │   └── callbacks.py                    # InterceptionTrackerCallback: per-episode metrics
 │                                       #   - Tracks intercept/collision/timeout/OOB rates
 │                                       #   - Estimates $/interception
@@ -528,7 +483,7 @@ drone_interception/
 ├── evaluation/                         # Model evaluation & visualization
 │   ├── __init__.py
 │   ├── evaluate.py                     # Run N episodes, compute all metrics, save JSON
-│   ├── compare_algorithms.py           # PPO vs SAC vs TD3 side-by-side comparison tables/plots
+│   ├── compare_algorithms.py           # Algorithm comparison tables/plots
 │   └── visualize_3d.py                 # Publication-quality 3D flight path trajectories
 │
 ├── models/                             # Trained models
@@ -538,7 +493,7 @@ drone_interception/
 │
 ├── backend/                            # FastAPI backend for live demo
 │   └── server.py                       # PPO inference + geographic coordinate mapping
-│                                       #   - Iran launch sites -> US base corridors
+│                                       #   - Adversary origin -> defender base corridors
 │                                       #   - Bezier pursuit trajectories
 │                                       #   - Domain randomization params in response
 │
@@ -631,7 +586,7 @@ See [docs/cost_analysis.md](docs/cost_analysis.md) for the full breakdown.
 
 ## Key Design Decisions
 
-1. **Why PPO wins**: Clipped objective provides stable training with our shaped reward that has sharp discontinuities (+500 interception, -75 collision). Off-policy methods (SAC/TD3) can be destabilized by these reward cliffs.
+1. **Why PPO**: Clipped objective provides stable training with our shaped reward that has sharp discontinuities (+500 interception, -75 collision). Conservative policy updates ensure monotonic improvement.
 
 2. **Why shaped reward**: Sparse reward (+1 for interception only) would require millions of timesteps. Our 8-component shaped reward provides continuous gradient: progress, proximity, energy, obstacles — while ensuring the interception bonus dominates to prevent orbiting.
 
@@ -665,10 +620,8 @@ See [docs/cost_analysis.md](docs/cost_analysis.md) for the full breakdown.
 ## References
 
 1. Schulman, J., et al. (2017). "Proximal Policy Optimization Algorithms." *arXiv:1707.06347*.
-2. Haarnoja, T., et al. (2018). "Soft Actor-Critic: Off-Policy Maximum Entropy Deep RL." *ICML 2018*.
-3. Fujimoto, S., et al. (2018). "Addressing Function Approximation Error in Actor-Critic Methods." *ICML 2018*.
-4. Tobin, J., et al. (2017). "Domain Randomization for Transferring DNNs from Simulation to the Real World." *IROS 2017*.
-5. OpenAI et al. (2019). "Solving Rubik's Cube with a Robot Hand." *arXiv:1910.07113*.
-6. Baker, B., et al. (2020). "Emergent Tool Use From Multi-Agent Autocurricula." *ICLR 2020*.
-7. Kaufmann, E., et al. (2023). "Champion-level drone racing using deep reinforcement learning." *Nature*.
-8. Loquercio, A., et al. (2021). "Learning High-Speed Flight in the Wild." *Science Robotics*.
+2. Tobin, J., et al. (2017). "Domain Randomization for Transferring DNNs from Simulation to the Real World." *IROS 2017*.
+3. OpenAI et al. (2019). "Solving Rubik's Cube with a Robot Hand." *arXiv:1910.07113*.
+4. Baker, B., et al. (2020). "Emergent Tool Use From Multi-Agent Autocurricula." *ICLR 2020*.
+5. Kaufmann, E., et al. (2023). "Champion-level drone racing using deep reinforcement learning." *Nature*.
+6. Loquercio, A., et al. (2021). "Learning High-Speed Flight in the Wild." *Science Robotics*.
