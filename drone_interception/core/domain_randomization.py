@@ -1,19 +1,10 @@
-"""
-Domain Randomization Wrapper for Sim2Real Transfer.
+"""Domain randomization for sim2real transfer.
 
-Domain randomization is one of the most effective techniques for bridging
-the gap between simulation and reality. The idea is simple but powerful:
-if you train your policy across a WIDE RANGE of simulated conditions,
-the real world becomes just another sample from that distribution.
+Randomizes physics parameters across episodes so policies generalize to real-world
+conditions. Reference: Tobin et al. (2017); OpenAI's Rubik's Cube work.
 
-Key reference: Tobin et al. (2017) "Domain Randomization for Transferring
-Deep Neural Networks from Simulation to the Real World"
-
-Also: OpenAI's Rubik's Cube work showed that aggressive domain randomization
-enabled zero-shot sim2real transfer for dexterous manipulation.
-
-For our drone interception task, we randomize parameters that would vary
-in real-world deployment: mass, thrust, drag, wind, sensor noise, etc.
+The trick: if you train across a wide range of conditions, reality becomes just
+another sample from that distribution.
 """
 
 import numpy as np
@@ -24,28 +15,11 @@ from collections import deque
 
 
 class DomainRandomizationWrapper(gym.Wrapper):
-    """
-    Gymnasium Wrapper that randomizes physics parameters at each episode reset.
-
-    This forces the RL policy to be robust to a wide range of conditions,
-    which is essential for sim2real transfer. A policy trained with only
-    nominal parameters will fail when real-world conditions don't match
-    the simulation exactly (and they never do).
-
-    Randomized parameters and their real-world justification:
-    - Drone mass: manufacturing variance, different payloads
-    - Max force: motor degradation, battery charge state
-    - Drag coefficient: wind conditions, altitude-dependent air density
-    - Evader speed: different target drone types/capabilities
-    - Num obstacles: varying environmental complexity
-    - Observation noise: IMU drift, sensor measurement error
-    - Action delay: motor response lag, onboard compute latency
-    - Gravity: altitude variation (negligible but included for completeness)
-
-    Usage:
-        base_env = DroneInterceptionEnv()
-        env = DomainRandomizationWrapper(base_env)
-        obs, info = env.reset()  # Parameters randomized here
+    """Randomize physics parameters at episode reset for robustness.
+    
+    Policies trained on only nominal parameters fail when reality doesn't match.
+    This wrapper forces generalization across manufacturing tolerance, battery state,
+    wind, sensor noise, and hardware latency—all real-world variables.
     """
 
     def __init__(
@@ -60,20 +34,7 @@ class DomainRandomizationWrapper(gym.Wrapper):
         randomize_action_delay: bool = True,
         randomize_gravity: bool = True,
     ) -> None:
-        """
-        Initialize the domain randomization wrapper.
-
-        Args:
-            env: The base DroneInterceptionEnv to wrap.
-            randomize_mass: Whether to randomize drone mass.
-            randomize_force: Whether to randomize max thrust force.
-            randomize_drag: Whether to randomize drag coefficient.
-            randomize_evader: Whether to randomize evader speed.
-            randomize_obstacles: Whether to randomize obstacle count.
-            randomize_obs_noise: Whether to add observation noise.
-            randomize_action_delay: Whether to add action delay.
-            randomize_gravity: Whether to randomize gravity.
-        """
+        """Initialize wrapper. Each randomization can be toggled independently for ablations."""
         super().__init__(env)
 
         # Store which randomizations are active
@@ -106,108 +67,50 @@ class DomainRandomizationWrapper(gym.Wrapper):
         seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """
-        Reset the environment with randomized physics parameters.
-
-        At the start of each episode, we sample new values for all active
-        randomization parameters. This means every episode is slightly
-        different, forcing the policy to generalize.
-
-        Args:
-            seed: Random seed for reproducibility.
-            options: Additional reset options.
-
-        Returns:
-            observation: Initial observation (potentially with added noise).
-            info: Dict with randomization log included.
-        """
+        """Sample new parameters and reset environment; every episode is different."""
         # Use numpy random for parameter sampling
         rng = np.random.RandomState(seed)
 
         self.randomization_log = {}
 
-        # =====================================================================
-        # MASS RANDOMIZATION: [0.7, 1.5] kg
-        # Why: Manufacturing tolerance on frame/motors is ±10-20%.
-        #      Payload variation (camera, net launcher, etc.) adds more.
-        #      A heavier drone has more inertia — harder to maneuver.
-        # =====================================================================
+        # Mass: manufacturing tolerance + payload variation; affects inertia/maneuverability
         if self.randomize_mass:
             mass = rng.uniform(0.7, 1.5)
             self.env.unwrapped.drone_mass = mass
             self.randomization_log["drone_mass"] = mass
 
-        # =====================================================================
-        # MAX FORCE RANDOMIZATION: [3.5, 7.0] N
-        # Why: Motor performance degrades with use (bearing wear, magnet weakening).
-        #      Battery voltage drops during flight (12.6V full → 10.5V empty),
-        #      reducing available thrust by ~15-20%.
-        #      Cold weather reduces battery output further.
-        # =====================================================================
+        # Max force: motor wear, battery voltage sag (~15-20% across flight)
         if self.randomize_force:
             force = rng.uniform(3.5, 7.0)
             self.env.unwrapped.max_force = force
             self.randomization_log["max_force"] = force
 
-        # =====================================================================
-        # DRAG COEFFICIENT RANDOMIZATION: [0.1, 0.6]
-        # Why: Wind is the #1 environmental factor for small drones.
-        #      Effective drag varies with wind speed and direction.
-        #      Also: air density changes ~12% between sea level and 2000m altitude.
-        #      Low drag (0.1) = calm indoor conditions.
-        #      High drag (0.6) = moderate outdoor wind (3-4 m/s).
-        # =====================================================================
+        # Drag: wind is the dominant environmental factor, plus altitude variation
         if self.randomize_drag:
             drag = rng.uniform(0.1, 0.6)
             self.env.unwrapped.drag_coeff = drag
             self.randomization_log["drag_coefficient"] = drag
 
-        # =====================================================================
-        # EVADER SPEED RANDOMIZATION: [1.0, 3.5] m/s
-        # Why: Target drones vary wildly in capability.
-        #      DJI Mini (~1 m/s cruise) vs racing drone (~10 m/s).
-        #      We focus on the "hobby/commercial drone" threat category.
-        #      The policy must handle slow loitering drones and fast ones.
-        # =====================================================================
+        # Evader speed: different drone types (hobby vs. racing) have vastly different capabilities
         if self.randomize_evader:
             speed = rng.uniform(1.0, 3.5)
             self.env.unwrapped.evader_speed = speed
             self.randomization_log["evader_speed"] = speed
 
-        # =====================================================================
-        # OBSTACLE COUNT RANDOMIZATION: [2, 8]
-        # Why: Operating environments vary from open fields (few obstacles)
-        #      to dense urban areas (many obstacles).
-        #      The policy must navigate both.
-        # =====================================================================
+        # Obstacle count: open fields vs. dense urban; policy must handle both
         if self.randomize_obstacles:
             num_obs = rng.randint(2, 9)  # [2, 8] inclusive
             self.env.unwrapped.num_obstacles = int(num_obs)
             self.randomization_log["num_obstacles"] = int(num_obs)
 
-        # =====================================================================
-        # OBSERVATION NOISE: σ ∈ [0, 0.05]
-        # Why: Real sensors are noisy.
-        #      IMU gyroscope drift: ~1°/hour (contributes to position error)
-        #      Barometer altitude: ±0.5m precision
-        #      Optical flow velocity: ±0.1 m/s error
-        #      Camera-based target tracking: ±0.2m at 10m range
-        #      Training with noise makes the policy robust to sensor imperfections.
-        # =====================================================================
+        # Observation noise: models real sensor drift and measurement error
         if self.randomize_obs_noise:
             self._obs_noise_std = rng.uniform(0, 0.05)
             self.randomization_log["obs_noise_std"] = self._obs_noise_std
         else:
             self._obs_noise_std = 0.0
 
-        # =====================================================================
-        # ACTION DELAY: [0, 3] steps
-        # Why: Real motor controllers have latency.
-        #      ESC (Electronic Speed Controller): 1-5ms response time
-        #      Flight controller loop: 1-20ms depending on hardware
-        #      Onboard inference (Jetson Nano): ~10ms per forward pass
-        #      At 60Hz sim, 3 steps = 50ms delay — realistic for cheap hardware.
-        # =====================================================================
+        # Action delay: motor controller lag + onboard inference latency (~10-50ms in reality)
         if self.randomize_action_delay:
             self._action_delay_steps = rng.randint(0, 4)  # [0, 3] inclusive
             self._action_buffer = deque(maxlen=max(self._action_delay_steps + 1, 1))
@@ -219,15 +122,7 @@ class DomainRandomizationWrapper(gym.Wrapper):
             self._action_delay_steps = 0
             self._action_buffer = deque(maxlen=1)
 
-        # =====================================================================
-        # GRAVITY RANDOMIZATION: [9.75, 9.85] m/s^2
-        # Why: Gravity varies with altitude and latitude.
-        #      Sea level equator: 9.780 m/s^2
-        #      Sea level poles: 9.832 m/s^2
-        #      At 1000m altitude: ~9.807 m/s^2
-        #      Small effect, but included for completeness.
-        #      Also helps the policy be robust to systematic force biases.
-        # =====================================================================
+        # Gravity: altitude/latitude variation; small effect but helps robustness
         if self.randomize_gravity:
             gravity = rng.uniform(9.75, 9.85)
             self.env.unwrapped.gravity = gravity
@@ -239,7 +134,7 @@ class DomainRandomizationWrapper(gym.Wrapper):
         # Reset the base environment with the new parameters
         obs, info = self.env.reset(seed=seed, options=options)
 
-        # Add noise to initial observation
+        # Add noise to initial observation to model sensor error upfront
         if self._obs_noise_std > 0:
             noise = np.random.normal(0, self._obs_noise_std, size=obs.shape)
             obs = obs + noise.astype(np.float32)
@@ -252,33 +147,19 @@ class DomainRandomizationWrapper(gym.Wrapper):
     def step(
         self, action: np.ndarray
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """
-        Execute one step with domain randomization effects applied.
-
-        Applies action delay and observation noise on top of the base
-        environment's step function.
-
-        Args:
-            action: The action from the RL policy.
-
-        Returns:
-            Tuple of (obs, reward, terminated, truncated, info) with
-            randomization effects applied.
-        """
-        # Apply action delay: buffer the current action and use a delayed one
-        # This simulates the real-world lag between deciding and executing
+        """Apply action delay and observation noise on every step."""
+        # Action delay: buffer incoming action and use a delayed one (simulates hardware latency)
         if self._action_delay_steps > 0:
             self._action_buffer.append(action.copy())
-            # Use the oldest action in the buffer (the delayed one)
+            # Use the oldest action in the buffer
             delayed_action = self._action_buffer[0]
         else:
             delayed_action = action
 
-        # Step the base environment with the (possibly delayed) action
+        # Execute step with the (possibly delayed) action
         obs, reward, terminated, truncated, info = self.env.step(delayed_action)
 
-        # Add observation noise
-        # This simulates sensor measurement error on every reading
+        # Observation noise: on every reading to model persistent sensor error
         if self._obs_noise_std > 0:
             noise = np.random.normal(0, self._obs_noise_std, size=obs.shape)
             obs = obs + noise.astype(np.float32)
@@ -286,24 +167,16 @@ class DomainRandomizationWrapper(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
     def get_randomization_summary(self) -> Dict[str, Any]:
-        """
-        Get statistics over all episodes' randomization parameters.
-
-        Useful for verifying that the randomization is covering the
-        intended range and for analyzing which parameter settings
-        correlate with success/failure.
-
-        Returns:
-            Dict with mean, std, min, max for each randomized parameter.
-        """
+        """Return statistics over all episodes; useful for verifying coverage and correlating with outcomes."""
         if not self.randomization_history:
             return {}
 
         summary = {}
-        # Get all parameter names from the first entry
+        # Extract all parameter names from the first episode
         param_names = self.randomization_history[0].keys()
 
         for param in param_names:
+            # Collect numeric values across all episodes
             values = [
                 ep[param] for ep in self.randomization_history
                 if param in ep and isinstance(ep[param], (int, float))
