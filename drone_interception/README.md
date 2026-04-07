@@ -115,7 +115,7 @@ A **4-stage fully autonomous** detection and interception pipeline with **zero h
 |-----------|------|----------|
 | RF Sensor | $5,000 | Passive radio detection, 80km range, bearing estimation |
 | PTZ Camera + YOLOv8 | $1,000 | Visual classification: UAV / bird / aircraft |
-| NVIDIA Jetson Nano | $100 | Runs PPO policy + YOLO inference, <10ms per cycle |
+| NVIDIA Jetson Nano | $100 | Cheapest NVIDIA GPU board; runs PPO (<10ms) + YOLOv8 (~30ms) simultaneously. Ground-mounted, not on-drone. |
 | Interceptor Drone | $300 | COTS quadcopter, kinetic intercept, reusable airframe |
 
 ### Software Stack
@@ -176,7 +176,7 @@ A **4-stage fully autonomous** detection and interception pipeline with **zero h
 
 ### `DroneInterceptionEnv` — Custom Gymnasium Environment
 
-A 3D pursuit-evasion environment where a low-cost interceptor drone (RL agent) must chase and capture an evading target drone.
+A 3D pursuit-evasion environment where a low-cost interceptor drone (**RL agent**) must chase and capture an evading target drone. **Only the interceptor is controlled by the PPO policy** — the adversary drone uses a scripted evasion policy (see below).
 
 | Parameter | Value | Justification |
 |-----------|-------|---------------|
@@ -205,11 +205,21 @@ Real-world sensor mapping: IMU + barometer -> own state; camera tracking -> targ
 
 ### Action Space (3-dimensional continuous)
 
-Normalized thrust `[-1, 1]` in x, y, z. Scaled by `MAX_FORCE`. Hover thrust auto-added to z-axis.
+The PPO agent outputs a **3D thrust vector** every timestep (1/60s):
+
+```
+Action = [thrust_x, thrust_y, thrust_z]    each in [-1, 1]
+           │          │          │
+           │          │          └── push up/down
+           │          └──────────── push forward/backward
+           └─────────────────────── push left/right
+```
+
+Each value is scaled by `MAX_FORCE` (5.0 N). Gravity compensation is auto-added to the z-axis so the drone hovers at zero thrust. In real deployment, a flight controller translates these force commands into individual rotor speeds.
 
 ### Target Evasion Policy (4 Layers)
 
-The adversary drone uses a **scripted multi-layered evasive policy** that produces challenging, unpredictable behavior:
+The adversary drone is **not an RL agent** — it uses a **scripted multi-layered evasive policy** that produces challenging, unpredictable behavior:
 
 1. **Figure-8 base pattern** — sinusoidal motion in x/y/z with phase offsets
 2. **Reactive evasion** — when interceptor is within 4m, target accelerates away from the pursuit vector
@@ -543,14 +553,24 @@ drone_interception/
 
 ### System Bill of Materials
 
+**Fixed costs (one-time infrastructure):**
+
 | Component | Cost | Notes |
 |-----------|------|-------|
-| RF Sensor (passive radio) | $5,000 | One-time; detects control signals at 80km |
-| PTZ Camera + YOLOv8 | $1,000 | One-time; visual classification |
-| NVIDIA Jetson Nano | $100 | One-time; runs PPO + YOLO at <10ms |
-| Interceptor Drone | $300 | **Reusable** airframe; marginal cost per mission |
-| **Total System** | **$6,400** | |
-| **Per-Intercept** | **$300** | Drone is recovered and reused |
+| RF Sensor (passive radio) | $5,000 | Permanent ground installation; detects control signals at 80km |
+| PTZ Camera + YOLOv8 | $1,000 | Permanent ground mount; visual classification |
+| NVIDIA Jetson Nano | $100 | Permanent ground station compute; runs PPO + YOLO |
+| **Infrastructure Total** | **$6,100** | **Buy once, use indefinitely** |
+
+**Variable costs (per intercept):**
+
+| Component | Cost | Notes |
+|-----------|------|-------|
+| Interceptor Drone | $300 | COTS quadcopter (frame, motors, battery, GPS). Replaced only if destroyed. |
+| Battery recharge | ~$5 | If drone survives and is recovered |
+| **Per-Intercept** | **$300** (worst case) | **$5 if drone is recovered and reused** |
+
+**Total first intercept: $6,400** — every subsequent intercept: **$300 or less**. The more you use it, the cheaper it gets.
 
 ### Cost Comparison
 
