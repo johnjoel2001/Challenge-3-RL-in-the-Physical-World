@@ -1,16 +1,6 @@
-"""
-Counter-UAS Command Center — 3D Globe + YOLO Detection Demo
+"""Counter-UAS command center with RF detection, YOLO camera, and RL interception.
 
-Scenario: Adversary drone launches from Iran, crosses the Persian Gulf
-with evasive maneuvers, gets detected by RF sensors, visually identified
-by YOLO, and intercepted by our RL-trained pursuit drone.
-
-Detection chain:
-  RF Sensor (80km) → YOLO Camera (30km) → RL Policy → Interceptor Kill
-
-Run:
-    cd drone_interception
-    streamlit run demo/command_center.py
+Run: streamlit run demo/command_center.py
 """
 
 import os, sys, math, time
@@ -25,9 +15,7 @@ from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ═════════════════════════════════════════════════════════════════════════
 # GEOGRAPHIC CONSTANTS
-# ═════════════════════════════════════════════════════════════════════════
 IRAN_LAUNCH_SITES = [
     {"lat": 27.18, "lon": 56.27, "label": "Bandar Abbas"},
     {"lat": 26.55, "lon": 54.35, "label": "Bandar Lengeh"},
@@ -50,10 +38,8 @@ PHASE_KILL = 0.93
 TOTAL_FRAMES = 150
 SPEED_DELAY = {"SLOW": 0.22, "NORMAL": 0.08, "FAST": 0.02}
 
-# ═════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG & CSS
-# ═════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="Counter-UAS Command Center", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="Counter-UAS Command Center", layout="wide")
 
 st.markdown("""
 <style>
@@ -82,15 +68,13 @@ section[data-testid="stSidebar"]{background:#0d1117;border-right:1px solid #1a3a
 </style>""", unsafe_allow_html=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # SCENARIO GENERATION — non-deterministic random-walk path
-# ═════════════════════════════════════════════════════════════════════════
 def lerp(a, b, t):
     return a + (b - a) * t
 
 
 def generate_domain_rand(seed=42):
-    """Sample domain randomization parameters (mirrors core/domain_randomization.py)."""
+    """Sample domain randomization parameters."""
     rng = np.random.RandomState(seed + 7777)
     return {
         "drone_mass": round(rng.uniform(0.7, 1.5), 3),
@@ -105,7 +89,7 @@ def generate_domain_rand(seed=42):
 
 
 def generate_scenario(base_name, seed=42):
-    rng = np.random.RandomState(seed)
+    """Generate random-walk path from Iran launch site to target base."""
     b = AIRBASES[base_name]
     base_lat, base_lon = b["lat"], b["lon"]
 
@@ -116,8 +100,6 @@ def generate_scenario(base_name, seed=42):
     rf_t   = PHASE_RF   + rng.uniform(-0.08, 0.05)
     yolo_t = PHASE_YOLO + rng.uniform(-0.05, 0.05)
     kill_t = PHASE_KILL + rng.uniform(-0.04, 0.03)
-
-    drift_scale = rng.uniform(0.02, 0.06)
 
     # Random walk path for adversary
     adv_lat_c, adv_lon_c = iran_lat, iran_lon
@@ -188,9 +170,7 @@ def generate_scenario(base_name, seed=42):
     return frames, iran_label, iran_lat, iran_lon
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # 3D PYDECK MAP
-# ═════════════════════════════════════════════════════════════════════════
 def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
     b = AIRBASES[base_name]
     blat, blon = b["lat"], b["lon"]
@@ -202,10 +182,10 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
 
     layers = []
 
-    # ── ADVERSARY TRAIL: triple-layer glow (outer→mid→core) ──
+    # Adversary trail with triple-layer glow
     if n >= 2:
         adv_path = [[f["adv_lon"], f["adv_lat"], f["adv_alt"]] for f in frames[:n]]
-        # Outer glow — wide, very transparent
+        # Outer glow
         layers.append(pdk.Layer(
             "PathLayer", id="adv-glow-outer",
             data=[{"path": adv_path, "color": [255, 40, 40, 35]}],
@@ -227,7 +207,7 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
             width_min_pixels=3, get_width=12,
         ))
 
-    # ── INTERCEPTOR TRAIL: triple-layer glow (cyan-blue) ──
+    # Interceptor trail with cyan glow
     if n >= 1 and frames[min(n - 1, len(frames) - 1)]["pn"] >= 3:
         int_path = [[f["int_lon"], f["int_lat"], f["int_alt"]]
                      for f in frames[:n] if f["t"] >= PHASE_YOLO]
@@ -251,7 +231,7 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
                 width_min_pixels=3, get_width=12,
             ))
 
-    # ── DRONE POSITION MARKERS: outer halo + inner dot ──
+    # Drone markers with halo
     halos = []
     dots = []
     if n >= 1:
@@ -283,7 +263,7 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
             get_radius="radius", get_fill_color="color", pickable=True,
         ))
 
-    # ── BASE MARKER: double ring + label ──
+    # Base marker
     layers.append(pdk.Layer(
         "ScatterplotLayer", id="base-halo",
         data=[{"lon": blon, "lat": blat, "label": ""}],
@@ -292,12 +272,12 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
     ))
     layers.append(pdk.Layer(
         "ScatterplotLayer", id="base-dot",
-        data=[{"lon": blon, "lat": blat, "label": f"🛡️ {base_name}"}],
+        data=[{"lon": blon, "lat": blat, "label": f"{base_name}"}],
         get_position=["lon", "lat"], get_radius=2000,
         get_fill_color=[50, 220, 255, 200], pickable=True,
     ))
 
-    # ── IRAN LAUNCH SITE: double ring ──
+    # Iran launch site
     layers.append(pdk.Layer(
         "ScatterplotLayer", id="iran-halo",
         data=[{"lon": iran_lon, "lat": iran_lat, "label": ""}],
@@ -306,12 +286,12 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
     ))
     layers.append(pdk.Layer(
         "ScatterplotLayer", id="iran-dot",
-        data=[{"lon": iran_lon, "lat": iran_lat, "label": f"🇮🇷 {iran_label}, Iran"}],
+        data=[{"lon": iran_lon, "lat": iran_lat, "label": f"{iran_label}, Iran"}],
         get_position=["lon", "lat"], get_radius=2000,
         get_fill_color=[255, 80, 80, 200], pickable=True,
     ))
 
-    # ── TEXT LABELS ──
+    # Text labels
     labels = [
         {"lon": blon, "lat": blat - 0.12, "text": base_name.split(",")[0]},
         {"lon": iran_lon, "lat": iran_lat + 0.12, "text": f"{iran_label}"},
@@ -327,7 +307,7 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
         font_weight=700,
     ))
 
-    # ── THREAT VECTOR ARC: Iran → base (dashed feel via width) ──
+    # Threat vector arc
     layers.append(pdk.Layer(
         "ArcLayer", id="threat-arc",
         data=[{
@@ -342,7 +322,7 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
         great_circle=True,
     ))
 
-    # ── RF DETECTION RING (80km ≈ 0.72°) — amber dashed ──
+    # RF detection ring: 80km
     rf_pts = 80
     rf_ring = [[blon + 0.72 * math.cos(a), blat + 0.72 * math.sin(a)]
                for a in np.linspace(0, 2 * math.pi, rf_pts)]
@@ -368,7 +348,7 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
         font_family="'Courier New', monospace", font_weight=700,
     ))
 
-    # ── YOLO DETECTION RING (30km ≈ 0.27°) — green dashed ──
+    # YOLO detection ring: 30km
     yolo_ring = [[blon + 0.27 * math.cos(a), blat + 0.27 * math.sin(a)]
                  for a in np.linspace(0, 2 * math.pi, rf_pts)]
     yolo_ring.append(yolo_ring[0])
@@ -390,19 +370,19 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
         font_family="'Courier New', monospace", font_weight=700,
     ))
 
-    # ── KILL MARKER: explosion-style concentric rings ──
+    # Draw concentric rings on kill
     if n >= 1 and frames[n - 1]["pn"] == 4:
         cur = frames[n - 1]
         for r, a in [(5000, 30), (3500, 60), (2000, 140)]:
             layers.append(pdk.Layer(
                 "ScatterplotLayer", id=f"kill-ring-{r}",
                 data=[{"lon": cur["adv_lon"], "lat": cur["adv_lat"],
-                       "label": "✅ KILL CONFIRMED" if r == 2000 else ""}],
+                       "label": "KILL CONFIRMED" if r == 2000 else ""}],
                 get_position=["lon", "lat"], get_radius=r,
                 get_fill_color=[50, 255, 100, a], pickable=(r == 2000),
             ))
 
-    # ── VIEW STATE — adaptive zoom per base distance ──
+    # View state
     dlat = abs(blat - iran_lat)
     dlon = abs(blon - iran_lon)
     span = max(dlat, dlon)
@@ -424,11 +404,7 @@ def build_3d_map(base_name, frames, up_to, iran_label, iran_lat, iran_lon):
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# YOLO CAMERA — Visual Identification & Classification
-# Purpose: RF says "something is out there". YOLO CONFIRMS it's a drone
-# and provides precise tracking data for the RL interception policy.
-# ═════════════════════════════════════════════════════════════════════════
+# YOLO CAMERA — renders detection overlay with bounding box and confidence score.
 def render_yolo(f):
     """Render security-camera-style YOLO detection overlay."""
     fig, ax = plt.subplots(figsize=(5.5, 4.2), dpi=100)
@@ -459,19 +435,18 @@ def render_yolo(f):
             fontweight="bold", va="center")
 
     if pn <= 1:
-        # ── NO DETECTION ──
+        # No signal yet
         ax.text(320, 200, "SCANNING", color="#333333", fontsize=22,
                 fontfamily="monospace", ha="center", fontweight="bold")
         ax.text(320, 240, "No targets in view", color="#222222", fontsize=10,
                 fontfamily="monospace", ha="center")
         ax.text(320, 280, "Awaiting RF handoff...", color="#1a1a1a", fontsize=9,
                 fontfamily="monospace", ha="center")
-        # Role explanation
-        ax.text(320, 440, "ROLE: Visually identify & classify aerial targets",
+        ax.text(320, 440, "ROLE: Visually identify and classify aerial targets",
                 color="#222222", fontsize=7, fontfamily="monospace", ha="center")
 
     elif pn == 2:
-        # ── RF DETECTED, CAMERA SLEWING ──
+        # Slewing to RF bearing
         ax.text(320, 160, "⚠ RF SIGNAL RECEIVED", color="#ffcc00", fontsize=16,
                 fontfamily="monospace", ha="center", fontweight="bold")
         ax.text(320, 200, f"Bearing {f['bearing']:.0f}°  |  Range {dist:.0f} km",
@@ -488,12 +463,12 @@ def render_yolo(f):
                 color="#555500", fontsize=7, fontfamily="monospace", ha="center")
 
     else:
-        # ── YOLO ACTIVE — VISUAL IDENTIFICATION CONFIRMED ──
+        # Target locked
         sz = max(30, min(140, 800 / max(dist, 2.0)))
         cx = 320 + np.random.normal(0, 12)
         cy = 220 + np.random.normal(0, 8)
 
-        # Drone silhouette
+        # Draw drone shape
         dc = "#222222"
         body = plt.Circle((cx, cy), sz * 0.15, color=dc, zorder=5)
         ax.add_patch(body)
@@ -545,7 +520,7 @@ def render_yolo(f):
                 fontfamily="monospace", fontweight="bold",
                 bbox=dict(boxstyle="square,pad=0.3", facecolor="#000", alpha=0.8))
 
-        # Role explanation
+        # Status line
         role = "CONFIRMED: Object classified as hostile UAV by YOLOv8"
         if pn == 4:
             role = "TARGET NEUTRALIZED — visual confirmation complete"
@@ -566,13 +541,11 @@ def render_yolo(f):
     return buf
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # LOG ENTRY
-# ═════════════════════════════════════════════════════════════════════════
 def log_entry(f):
     d, c, pn = f["dist_km"], f["yc"], f["pn"]
     if pn == 4:
-        return '<span class="sc">✅ [KILL] TARGET INTERCEPTED — visual confirm via YOLO</span>'
+        return '<span class="sc">[KILL] TARGET INTERCEPTED — visual confirm via YOLO</span>'
     elif pn == 3 and d < 5:
         return f'<span class="rc">[YOLO] UAV conf:{c:.0%} | {d:.0f}km | CLOSING — RL policy active</span>'
     elif pn == 3:
@@ -583,34 +556,30 @@ def log_entry(f):
         return '<span style="color:#334455;">[SCAN] No contacts — monitoring</span>'
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # PIPELINE
-# ═════════════════════════════════════════════════════════════════════════
 def render_pipeline(active=0):
     p1, p2, p3, p4 = st.columns(4)
     def _c(n):
         return ("#44ff44", "#44ff44") if active >= n else ("#44ddff", "#1a2a3a")
     c1, b1 = _c(1); c2, b2 = _c(2); c3, b3 = _c(3); c4, b4 = _c(4)
     with p1:
-        st.markdown(f'<div class="pb" style="border-color:{b1}"><div class="ptc" style="color:{c1}">📡 RF Detection</div>'
+        st.markdown(f'<div class="pb" style="border-color:{b1}"><div class="ptc" style="color:{c1}">RF Detection</div>'
                     '<div class="pd">Detects radio signal<br>Range: 80km<br>Cost: $5,000</div></div>', unsafe_allow_html=True)
     with p2:
-        st.markdown(f'<div class="pb" style="border-color:{b2}"><div class="ptc" style="color:{c2}">👁️ YOLO ID</div>'
+        st.markdown(f'<div class="pb" style="border-color:{b2}"><div class="ptc" style="color:{c2}">YOLO ID</div>'
                     '<div class="pd">Confirms it\'s a UAV<br>Visual classification<br>Cost: $1,000</div></div>', unsafe_allow_html=True)
     with p3:
-        st.markdown(f'<div class="pb" style="border-color:{b3}"><div class="ptc" style="color:{c3}">🧠 RL Policy</div>'
+        st.markdown(f'<div class="pb" style="border-color:{b3}"><div class="ptc" style="color:{c3}">RL Policy</div>'
                     '<div class="pd">PPO computes thrust<br>Inference &lt;1ms<br>Cost: $100</div></div>', unsafe_allow_html=True)
     with p4:
-        st.markdown(f'<div class="pb" style="border-color:{b4}"><div class="ptc" style="color:{c4}">🚀 Intercept</div>'
+        st.markdown(f'<div class="pb" style="border-color:{b4}"><div class="ptc" style="color:{c4}">Intercept</div>'
                     '<div class="pd">Drone pursues &amp; kills<br>Speed: 5 m/s<br>Cost: $300</div></div>', unsafe_allow_html=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # SIDEBAR
-# ═════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown('<div style="color:#ff4444;font-family:Courier New;font-size:1.1em;'
-                'letter-spacing:2px;">🛡️ MISSION CONTROL</div>', unsafe_allow_html=True)
+                'letter-spacing:2px;">MISSION CONTROL</div>', unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="sl">AIRBASE</div>', unsafe_allow_html=True)
@@ -624,7 +593,7 @@ with st.sidebar:
         st.session_state.seed_val = 60
     sc, rc = st.columns([3, 1])
     with rc:
-        if st.button("🎲", help="Random seed", use_container_width=True):
+        if st.button("[R]", help="Random seed", use_container_width=True):
             st.session_state.seed_val = int(np.random.randint(0, 9999))
             st.rerun()
     with sc:
@@ -640,16 +609,16 @@ with st.sidebar:
                            help="Randomize physics params each episode for sim2real robustness")
 
     st.markdown("")
-    launch = st.button("🚀 LAUNCH MISSION", type="primary", use_container_width=True)
+    launch = st.button("LAUNCH MISSION", type="primary", use_container_width=True)
 
     st.markdown("---")
     st.markdown('<div class="sl">DETECTION CHAIN</div>', unsafe_allow_html=True)
     st.markdown(
         '<div style="font-family:Courier New;font-size:0.68em;color:#88aacc;line-height:2.2;">'
-        '1. 📡 <b>RF Sensor</b> → detects signal<br>'
-        '2. 👁️ <b>YOLO Camera</b> → confirms UAV<br>'
-        '3. 🧠 <b>RL Policy</b> → computes pursuit<br>'
-        '4. 🚀 <b>Interceptor</b> → kills target</div>', unsafe_allow_html=True)
+        '1. <b>RF Sensor</b> → detects signal<br>'
+        '2. <b>YOLO Camera</b> → confirms UAV<br>'
+        '3. <b>RL Policy</b> → computes pursuit<br>'
+        '4. <b>Interceptor</b> → kills target</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown('<div class="sl">$ SYSTEM COST</div>', unsafe_allow_html=True)
@@ -666,21 +635,17 @@ with st.sidebar:
         '</div>', unsafe_allow_html=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # HEADER
-# ═════════════════════════════════════════════════════════════════════════
-st.markdown('<div class="mt">🛡️ COUNTER-UAS COMMAND CENTER</div>', unsafe_allow_html=True)
+st.markdown('<div class="mt">COUNTER-UAS COMMAND CENTER</div>', unsafe_allow_html=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # MISSION EXECUTION
-# ═════════════════════════════════════════════════════════════════════════
 if launch:
     frames, iran_label, iran_lat, iran_lon = generate_scenario(selected_base, seed=int(seed))
     dr_params = generate_domain_rand(seed=int(seed)) if dr_enabled else None
     total = len(frames)
 
-    st.markdown(f'<div class="st2">SCENARIO: 🇮🇷 {iran_label.upper()}, IRAN → 🛡️ {selected_base.upper()}</div>',
+    st.markdown(f'<div class="st2">SCENARIO: {iran_label.upper()}, IRAN → {selected_base.upper()}</div>',
                 unsafe_allow_html=True)
 
     # Domain Randomization — show prominently above banner
@@ -697,23 +662,23 @@ if launch:
             f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Gravity</div><div class="mv" style="font-size:1em">{dr_params["gravity"]}</div></div>' +
             '</div>' +
             '<div style="color:#445566;font-family:Courier New;font-size:0.58em;text-align:center;margin-bottom:4px;">' +
-            '🔀 DOMAIN RANDOMIZATION — physics randomized per episode for sim2real robustness</div>',
+            'DOMAIN RANDOMIZATION — physics randomized per episode for sim2real robustness</div>',
             unsafe_allow_html=True)
 
     banner_ph = st.empty()
-    banner_ph.markdown('<div class="bn ba">🛫 ADVERSARY DRONE LAUNCHED FROM IRAN</div>',
+    banner_ph.markdown('<div class="bn ba">ADVERSARY DRONE LAUNCHED FROM IRAN</div>',
                        unsafe_allow_html=True)
     met_ph = st.empty()
 
     # Layout: 3D map (large) | YOLO camera + log
     map_col, right_col = st.columns([6, 4])
     with map_col:
-        st.markdown('<div class="sh">🌍 3D TACTICAL MAP — PERSIAN GULF THEATER</div>',
+        st.markdown('<div class="sh">3D TACTICAL MAP — PERSIAN GULF THEATER</div>',
                     unsafe_allow_html=True)
     with right_col:
         yolo_lbl = st.empty()
         yolo_lbl.markdown(
-            '<div class="sh">👁️ YOLO VISUAL ID — <span style="color:#ff8844;">Why? RF detects signal, '
+            '<div class="sh">YOLO VISUAL ID — <span style="color:#ff8844;">Why? RF detects signal, '
             'YOLO confirms it\'s a drone</span></div>', unsafe_allow_html=True)
 
     map_ph = map_col.empty()
@@ -721,7 +686,7 @@ if launch:
 
     # Log below YOLO
     with right_col:
-        st.markdown('<div class="sh" style="margin-top:8px;">📋 DETECTION LOG</div>',
+        st.markdown('<div class="sh" style="margin-top:8px;">DETECTION LOG</div>',
                     unsafe_allow_html=True)
     log_ph = right_col.empty()
 
@@ -729,7 +694,7 @@ if launch:
     st.markdown("---")
     pipe_ph = st.empty()
 
-    # --- Determine map update schedule ---
+    # Map update schedule: add frames when phase changes or at midpoints
     phase_frames = [0]
     last_pn = frames[0]["pn"]
     for idx, f in enumerate(frames):
@@ -760,10 +725,10 @@ if launch:
 
         # Banner
         banners = {
-            1: '<div class="bn bw">🛫 ADVERSARY CROSSING PERSIAN GULF — UNDETECTED</div>',
-            2: '<div class="bn ba">📡 RF SIGNAL DETECTED — CAMERA SLEWING TO BEARING</div>',
-            3: '<div class="bn ba">🚀 YOLO CONFIRMED UAV — INTERCEPTOR PURSUING</div>',
-            4: '<div class="bn bs">✅ KILL CONFIRMED — TARGET NEUTRALIZED</div>',
+            1: '<div class="bn bw">ADVERSARY CROSSING PERSIAN GULF — UNDETECTED</div>',
+            2: '<div class="bn ba">RF SIGNAL DETECTED — CAMERA SLEWING TO BEARING</div>',
+            3: '<div class="bn ba">YOLO CONFIRMED UAV — INTERCEPTOR PURSUING</div>',
+            4: '<div class="bn bs">KILL CONFIRMED — TARGET NEUTRALIZED</div>',
         }
         banner_ph.markdown(banners[f["pn"]], unsafe_allow_html=True)
 
@@ -788,9 +753,7 @@ if launch:
         time.sleep(delay)
 
 else:
-    # ═════════════════════════════════════════════════════════════════
     # STANDBY
-    # ═════════════════════════════════════════════════════════════════
     st.markdown(f'<div class="st2">[ {selected_base.upper()} ] — MONITORING IRANIAN AIRSPACE</div>',
                 unsafe_allow_html=True)
     st.markdown('<div class="bn bw">SECTOR DEFENSE STANDBY — AWAITING LAUNCH COMMAND</div>',
@@ -809,20 +772,20 @@ else:
     preview_site = IRAN_LAUNCH_SITES[0]
     mc, rc2 = st.columns([6, 4])
     with mc:
-        st.markdown('<div class="sh">🌍 3D TACTICAL MAP — PERSIAN GULF THEATER</div>',
+        st.markdown('<div class="sh">3D TACTICAL MAP — PERSIAN GULF THEATER</div>',
                     unsafe_allow_html=True)
         deck = build_3d_map(selected_base, [], 0, preview_site["label"],
                             preview_site["lat"], preview_site["lon"])
         st.pydeck_chart(deck)
     with rc2:
         st.markdown(
-            '<div class="sh">👁️ YOLO VISUAL ID — <span style="color:#ff8844;">'
+            '<div class="sh">YOLO VISUAL ID — <span style="color:#ff8844;">'
             'Why? RF detects signal, YOLO confirms it\'s a drone</span></div>',
             unsafe_allow_html=True)
         st.markdown(
             '<div style="background:#050505;border:1px solid #1a2a3a;border-radius:4px;'
-            'padding:25px;text-align:center;">'
-            '<div style="color:#222;font-size:2.5em;">📷</div>'
+            'padding:25px;text-align:center;">'  
+            '<div style="color:#222;font-size:2.5em;">[Camera]</div>'
             '<div style="color:#334455;font-family:Courier New;font-size:0.9em;margin-top:10px;">'
             'CAMERA OFFLINE</div>'
             '<div style="color:#223344;font-family:Courier New;font-size:0.7em;margin-top:8px;">'
@@ -830,7 +793,7 @@ else:
             'YOLO then classifies the object as UAV / bird / aircraft.</div></div>',
             unsafe_allow_html=True)
 
-        st.markdown('<div class="sh" style="margin-top:12px;">📋 DETECTION LOG</div>',
+        st.markdown('<div class="sh" style="margin-top:12px;">DETECTION LOG</div>',
                     unsafe_allow_html=True)
         st.markdown('<div class="lg2" style="color:#334455;">Awaiting RF signal...</div>',
                     unsafe_allow_html=True)
@@ -852,5 +815,5 @@ else:
             f'<div class="mb" style="flex:1;min-width:80px;padding:3px 6px"><div class="ml2">Gravity</div><div class="mv" style="font-size:1em">{dr_params_standby["gravity"]}</div></div>' +
             '</div>' +
             '<div style="color:#445566;font-family:Courier New;font-size:0.58em;text-align:center;margin-top:4px;">' +
-            '🔀 DOMAIN RANDOMIZATION — physics randomized per episode for sim2real robustness (seed: ' + str(int(seed)) + ')</div>',
+            'DOMAIN RANDOMIZATION — physics randomized per episode for sim2real robustness (seed: ' + str(int(seed)) + ')</div>',
             unsafe_allow_html=True)

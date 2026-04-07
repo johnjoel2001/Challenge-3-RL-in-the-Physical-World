@@ -1,19 +1,6 @@
-"""
-Streamlit Interactive Dashboard for Low-Cost Drone Interception via RL.
+"""Interactive dashboard for RL-trained drone interception agents.
 
-This is the presentation showpiece — a polished, interactive web app that
-lets you explore the trained RL agents, compare algorithms, analyze costs,
-and understand the sim2real challenges.
-
-Run with:
-    cd drone_interception
-    streamlit run dashboard/app.py
-
-Sections:
-    Tab 1: Live Demo — Run episodes with adjustable parameters
-    Tab 2: Algorithm Comparison — PPO vs SAC vs TD3 analysis
-    Tab 3: Cost Analysis — Our drone vs missiles/jammers
-    Tab 4: Sim2Real Challenges — Domain randomization analysis
+Run: streamlit run dashboard/app.py
 """
 
 import os
@@ -26,18 +13,15 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import Dict, Any, List, Optional
 
-# Add project root to path
+# Add project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.drone_env import DroneInterceptionEnv, ARENA_SIZE, ARENA_HEIGHT, CAPTURE_DISTANCE
 from core.cost_aware_reward import CostAwareReward, COUNTER_UAS_COSTS
 
-# =============================================================================
-# PAGE CONFIG
-# =============================================================================
+# Configuration
 st.set_page_config(
-    page_title="Low-Cost Drone Interception via RL",
-    page_icon="🎯",
+    page_title="RL Drone Interception",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -84,7 +68,7 @@ st.markdown("""
 # =============================================================================
 # HEADER
 # =============================================================================
-st.markdown('<div class="main-header">🎯 Low-Cost Drone Interception via RL</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">Low-Cost Drone Interception via RL</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Training a $300 drone to do the job of a $3M missile</div>', unsafe_allow_html=True)
 
 
@@ -200,10 +184,10 @@ def run_demo_episode(
 # TABS
 # =============================================================================
 tab1, tab2, tab3, tab4 = st.tabs([
-    "🚀 Live Demo",
-    "📊 Algorithm Comparison",
-    "💰 Cost Analysis",
-    "🔧 Sim2Real Challenges",
+    "Live Demo",
+    "Algorithm Comparison",
+    "Cost Analysis",
+    "Sim2Real Challenges",
 ])
 
 
@@ -232,7 +216,7 @@ with tab1:
     # Run episode button
     col_btn, col_status = st.columns([1, 2])
     with col_btn:
-        run_btn = st.button("🎯 Run Episode", type="primary", use_container_width=True)
+        run_btn = st.button("Run Episode", type="primary", use_container_width=True)
 
     if run_btn:
         model = try_load_model(algo_choice.lower())
@@ -571,7 +555,7 @@ with tab3:
             if "RL" in method:
                 # Recalculate with user's success rate
                 rl_annual = annual_threats * (350 / rl_success_rate)
-                st.markdown(f"- **{method}**: **${rl_annual:,.0f}/year** ✅")
+                st.markdown(f"- **{method}**: **${rl_annual:,.0f}/year**")
             else:
                 st.markdown(f"- **{method}**: ${annual_cost:,.0f}/year")
 
