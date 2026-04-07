@@ -2,12 +2,9 @@
 
 <p align="center">
   <strong>A $6,400 AI system that solves the $3,000,000 problem</strong><br>
-  <em>Training a $300 interceptor drone to replace a $3M Patriot missile</em>
+
 </p>
 
-<p align="center">
-  <code>PPO</code>&nbsp;&bull;&nbsp;<code>Domain Randomization</code>&nbsp;&bull;&nbsp;<code>Sim2Real</code>&nbsp;&bull;&nbsp;<code>Edge AI</code>&nbsp;&bull;&nbsp;<code>YOLOv8</code>
-</p>
 
 ---
 
