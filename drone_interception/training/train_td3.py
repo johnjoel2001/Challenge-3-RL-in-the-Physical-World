@@ -1,26 +1,4 @@
-"""
-Train a TD3 (Twin Delayed DDPG) agent for drone interception.
-
-TD3 improves on DDPG with three key tricks:
-1. TWIN CRITICS: Two Q-networks; take the minimum to reduce overestimation bias.
-   This is critical for our task because the interception bonus (+100) can cause
-   value overestimation that destabilizes training.
-2. DELAYED POLICY UPDATES: Update the policy network less frequently than the
-   critics (every 2 critic updates). This lets the value estimates stabilize
-   before using them to improve the policy.
-3. TARGET POLICY SMOOTHING: Add noise to target actions during critic updates.
-   This prevents the policy from exploiting narrow peaks in the Q-function.
-
-TD3 vs PPO vs SAC for drone interception:
-- TD3 is deterministic (no entropy bonus) → potentially more precise trajectories
-- TD3 needs careful exploration noise setup (policy_noise, noise_clip)
-- TD3 can be the most sample-efficient but also the most brittle
-- TD3's deterministic policy is ideal for deployment (no sampling at inference time)
-
-Usage:
-    python -m training.train_td3 --timesteps 500000 --seed 42
-    python -m training.train_td3 --timesteps 500000 --domain-rand
-"""
+"""Train TD3 agent for drone interception."""
 
 import os
 import sys
@@ -40,22 +18,8 @@ from core.domain_randomization import DomainRandomizationWrapper
 from training.callbacks import InterceptionTrackerCallback
 
 
-def make_env(
-    seed: int = 0,
-    use_domain_rand: bool = False,
-):
-    """
-    Create a single environment instance for TD3 training.
-
-    Like SAC, TD3 is off-policy and uses 1 environment with a replay buffer.
-
-    Args:
-        seed: Random seed.
-        use_domain_rand: Whether to wrap with domain randomization.
-
-    Returns:
-        Wrapped Gymnasium environment.
-    """
+def make_env(seed: int = 0, use_domain_rand: bool = False):
+    """Create environment for TD3 training."""
     env = DroneInterceptionEnv(render_mode=None)
     if use_domain_rand:
         env = DomainRandomizationWrapper(env)
@@ -69,36 +33,15 @@ def train_td3(
     seed: int = 42,
     use_domain_rand: bool = False,
 ) -> None:
+    """Train TD3 agent.  
+    
+    Deterministic off-policy algorithm with twin critics and delayed policy
+    updates. Single environment with 100K replay buffer and Gaussian exploration
+    noise (σ=0.2). Policy updates every 2 critic updates. Hyperparameters:
+    lr=3e-4, batch_size=256, tau=0.005, policy_delay=2. Network: [256, 256].
+    Cost model: $300 drone + $5 energy per episode.
     """
-    Train a TD3 agent on the drone interception environment.
-
-    TD3 Hyperparameters:
-    - learning_rate=3e-4: Same as PPO/SAC for fair comparison.
-    - buffer_size=100000: Same replay buffer as SAC.
-    - batch_size=256: Same as SAC for consistency.
-    - gamma=0.99: High discount for long-horizon interception.
-    - tau=0.005: Soft target update rate (same as SAC).
-    - policy_noise=0.2: Gaussian noise added to target policy during critic
-      updates. Smooths the Q-function landscape.
-    - noise_clip=0.5: Clips the target policy noise to prevent extreme values.
-    - policy_delay=2: Update policy every 2 critic updates.
-      This is TD3's signature — lets Q-values stabilize first.
-    - action_noise: Gaussian exploration noise (σ=0.1) added during data
-      collection. TD3's policy is deterministic, so without this noise,
-      it would never explore.
-
-    Args:
-        total_timesteps: Total environment steps for training.
-        seed: Random seed for reproducibility.
-        use_domain_rand: Whether to use domain randomization.
-    """
-    print("\n" + "=" * 70)
-    print("  TD3 Training — Low-Cost Drone Interception")
-    print("=" * 70)
-    print(f"  Timesteps:          {total_timesteps:,}")
-    print(f"  Seed:               {seed}")
-    print(f"  Domain Rand:        {use_domain_rand}")
-    print("=" * 70)
+    print(f"TD3 Training — {total_timesteps:,} steps, seed={seed}, domain_rand={use_domain_rand}")
 
     # Set seeds for reproducibility
     np.random.seed(seed)
@@ -141,13 +84,9 @@ def train_td3(
     # Create callback
     callback = InterceptionTrackerCallback(log_interval=10000, verbose=1)
 
-    # Train!
+    # Train
     start_time = time.time()
-    model.learn(
-        total_timesteps=total_timesteps,
-        callback=callback,
-        progress_bar=True,
-    )
+    model.learn(total_timesteps=total_timesteps, callback=callback, progress_bar=True)
     elapsed = time.time() - start_time
 
     # Save model and metrics
@@ -156,12 +95,11 @@ def train_td3(
 
     model_path = "./models/td3_interceptor"
     model.save(model_path)
-    print(f"\n  Model saved to: {model_path}.zip")
+    print(f"Model saved: {model_path}.zip")
 
     metrics_path = "./results/td3_metrics.json"
     callback.save_metrics(metrics_path)
-
-    print(f"\n  Total training time: {elapsed:.1f}s ({elapsed/60:.1f} min)")
+    print(f"Training time: {elapsed/60:.1f} min")
     final = callback.get_final_metrics()
     if final:
         print(f"  Final interception rate: {final['intercept_rate']*100:.1f}%")
