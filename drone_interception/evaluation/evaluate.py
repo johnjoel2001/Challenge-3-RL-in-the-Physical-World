@@ -1,18 +1,9 @@
-"""
-Evaluate a trained drone interception model over multiple episodes.
+"""Evaluate a trained model over multiple episodes.
 
-This script loads a trained model and runs it deterministically for N episodes,
-computing comprehensive metrics including interception rate, collision rate,
-average reward, episode length, energy usage, and estimated cost per interception.
-
-These metrics are essential for:
-1. Validating that the trained policy actually works (not just high reward)
-2. Computing real-world cost estimates for the cost-effectiveness argument
-3. Comparing different algorithms on the same evaluation protocol
+Computes: interception rate, collision rate, reward, episode length, energy, cost per interception.
 
 Usage:
-    python -m evaluation.evaluate --model models/ppo_interceptor.zip --episodes 100
-    python -m evaluation.evaluate --model models/sac_interceptor.zip --episodes 100 --seed 123
+    python -m evaluation.evaluate --model models/ppo_interceptor.zip --episodes 100 --seed 123
 """
 
 import os
@@ -38,15 +29,7 @@ ALGO_MAP = {
 
 
 def detect_algorithm(model_path: str) -> str:
-    """
-    Detect which algorithm a saved model uses from its filename.
-
-    Args:
-        model_path: Path to the saved model .zip file.
-
-    Returns:
-        Algorithm name string ("ppo", "sac", or "td3").
-    """
+    """Extract algorithm name from model filename."""
     basename = os.path.basename(model_path).lower()
     for algo_name in ALGO_MAP:
         if algo_name in basename:
@@ -62,33 +45,17 @@ def evaluate_model(
     deterministic: bool = True,
     verbose: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Evaluate a trained model over multiple episodes.
-
-    Runs the policy deterministically (no exploration noise) to get a clean
-    assessment of its learned behavior. Collects per-episode data for
-    statistical analysis.
-
-    Args:
-        model_path: Path to the saved SB3 model (.zip).
-        n_episodes: Number of evaluation episodes.
-        seed: Random seed for reproducible evaluation.
-        deterministic: Whether to use deterministic actions (recommended for eval).
-        verbose: Whether to print progress.
-
-    Returns:
-        Dict with aggregate metrics and per-episode data.
-    """
-    # Load the trained model
+    """Run model over n episodes and compute metrics."""
+    # Load model
     algo_name = detect_algorithm(model_path)
     AlgoClass = ALGO_MAP[algo_name]
 
     if verbose:
-        print(f"\n  Loading {algo_name.upper()} model from: {model_path}")
+        print(f"  Loading {algo_name.upper()} model: {model_path}")
 
     model = AlgoClass.load(model_path)
 
-    # Create evaluation environment (separate from training env)
+    # Environment and cost tracker
     env = DroneInterceptionEnv(render_mode=None)
     cost_tracker = CostAwareReward()
 
@@ -96,7 +63,7 @@ def evaluate_model(
     episodes: List[Dict[str, Any]] = []
 
     if verbose:
-        print(f"  Running {n_episodes} evaluation episodes (deterministic={deterministic})...")
+        print(f"  Running {n_episodes} evaluation episodes...")
 
     for ep in range(n_episodes):
         obs, info = env.reset(seed=seed + ep)
@@ -150,7 +117,7 @@ def evaluate_model(
 
     env.close()
 
-    # Compute aggregate metrics
+    # Aggregate metrics
     n = len(episodes)
     intercept_count = sum(1 for e in episodes if e["intercepted"])
     collision_count = sum(1 for e in episodes if e["collision"])
@@ -167,11 +134,11 @@ def evaluate_model(
     avg_steps = np.mean([e["steps"] for e in episodes])
     avg_energy = np.mean([e["energy_used"] for e in episodes])
 
-    # Cost per interception: total cost across all missions / number of successes
+    # Cost per interception
     total_cost = sum(e["mission_cost"] for e in episodes)
     cost_per_interception = total_cost / max(intercept_count, 1)
 
-    # Successful episode metrics (only episodes that intercepted)
+    # Successful episode metrics
     successful = [e for e in episodes if e["intercepted"]]
     avg_success_steps = np.mean([e["steps"] for e in successful]) if successful else 0
     avg_success_reward = np.mean([e["reward"] for e in successful]) if successful else 0
@@ -225,16 +192,8 @@ def print_results(results: Dict[str, Any]) -> None:
 
 
 def save_results(results: Dict[str, Any], filepath: str) -> None:
-    """
-    Save evaluation results to a JSON file.
-
-    Args:
-        results: Evaluation results dict.
-        filepath: Output file path.
-    """
+    """Save evaluation results to JSON."""
     os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)
-
-    # Make a copy without per-episode data for cleaner output
     summary = {k: v for k, v in results.items() if k != "episodes"}
     summary["episode_count"] = len(results.get("episodes", []))
 

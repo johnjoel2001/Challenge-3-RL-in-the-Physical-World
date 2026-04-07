@@ -1,18 +1,6 @@
-"""
-3D Trajectory Visualization for Drone Interception.
+"""3D trajectory visualization for drone interception episodes.
 
-This script generates publication-quality 3D plots showing:
-- Interceptor trajectory (blue) with time-progression color gradient
-- Target trajectory (red) with time-progression color gradient
-- Interception point marked with a green star
-- Obstacles as gray boxes
-- Arrow heads showing flight direction
-
-These plots are the VISUAL PROOF that the RL policy learned intelligent
-pursuit behavior — not random movement. They show:
-1. The interceptor predicting where the target will be (lead pursuit)
-2. Obstacle avoidance while maintaining pursuit
-3. The "closing spiral" near interception (proximity bonus working)
+Shows: interceptor (blue), target (red), obstacles (gray), interception point (green).
 
 Usage:
     python -m evaluation.visualize_3d
@@ -21,6 +9,7 @@ Usage:
 
 import os
 import sys
+import json
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -54,21 +43,7 @@ def record_episode(
     seed: int = 0,
     deterministic: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Run a single episode and record full trajectories.
-
-    Records position history for both drones at every timestep,
-    plus metadata about the episode outcome.
-
-    Args:
-        model: Trained SB3 model.
-        env: DroneInterceptionEnv instance.
-        seed: Episode seed.
-        deterministic: Whether to use deterministic actions.
-
-    Returns:
-        Dict with trajectory data and episode metadata.
-    """
+    """Run episode and record full trajectories."""
     obs, info = env.reset(seed=seed)
 
     interceptor_positions = [env.interceptor_pos.copy()]
@@ -107,14 +82,7 @@ def draw_obstacle_box(
     color: str = "gray",
     alpha: float = 0.2,
 ) -> None:
-    """
-    Draw a 3D box (obstacle) on a matplotlib 3D axes.
-
-    Args:
-        ax: Matplotlib 3D axes.
-        center: (x, y, z) center of the box.
-        size: (dx, dy, dz) half-extents of the box.
-    """
+    """Draw a 3D box on the axes."""
     cx, cy, cz = center
     dx, dy, dz = size
 
@@ -150,17 +118,7 @@ def plot_trajectory_3d(
     episode_num: int = 0,
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Create a 3D plot of interceptor and target trajectories.
-
-    Uses color gradients (light→dark) to show time progression,
-    making it easy to see how the pursuit unfolds over time.
-
-    Args:
-        episode_data: Dict from record_episode().
-        episode_num: Episode number (for title).
-        save_path: If provided, save plot to this path.
-    """
+    """Plot 3D interceptor and target trajectories with time coloring."""
     int_traj = episode_data["interceptor_trajectory"]
     tgt_traj = episode_data["target_trajectory"]
     intercepted = episode_data["intercepted"]
@@ -209,7 +167,7 @@ def plot_trajectory_3d(
             label=f"INTERCEPTION (step {steps})", edgecolors="gold", linewidth=1.5,
         )
 
-    # Add direction arrows at intervals
+    # Direction arrows
     arrow_interval = max(1, n_points // 8)
     for i in range(arrow_interval, n_points - 1, arrow_interval):
         # Interceptor arrows
@@ -423,8 +381,6 @@ def find_best_model() -> Optional[str]:
 
 
 if __name__ == "__main__":
-    import json
-
     parser = argparse.ArgumentParser(
         description="Generate 3D trajectory visualizations for drone interception"
     )
@@ -454,7 +410,7 @@ if __name__ == "__main__":
     # Load model
     algo_name = detect_algorithm(model_path)
     AlgoClass = ALGO_MAP[algo_name]
-    print(f"\n  Loading {algo_name.upper()} model from: {model_path}")
+    print(f"  Loading {algo_name.upper()} model: {model_path}")
     model = AlgoClass.load(model_path)
 
     # Create environment and record episodes

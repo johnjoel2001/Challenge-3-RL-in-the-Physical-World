@@ -1,17 +1,4 @@
-"""
-Side-by-Side Comparison of PPO vs SAC vs TD3 for Drone Interception.
-
-This script loads all three trained models, evaluates each on the same
-set of episodes, and generates comparison tables and plots.
-
-The comparison demonstrates analytical rigor: we didn't just pick one
-algorithm — we evaluated three fundamentally different approaches:
-- PPO: On-policy, conservative updates, entropy-regularized
-- SAC: Off-policy, maximum entropy, automatic temperature tuning
-- TD3: Off-policy, deterministic policy, twin critics
-
-Each has theoretical advantages for drone interception, and the empirical
-comparison shows which matters most in practice.
+"""Compare PPO vs SAC vs TD3 on the same evaluation episodes.
 
 Usage:
     python -m evaluation.compare_algorithms
@@ -43,15 +30,7 @@ ALGORITHMS = {
 
 
 def load_training_metrics(algo_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Load training metrics from JSON file for learning curve plots.
-
-    Args:
-        algo_name: Algorithm name (lowercase).
-
-    Returns:
-        Dict with training metrics or None if file not found.
-    """
+    """Load training metrics from JSON file."""
     filepath = f"./results/{algo_name}_metrics.json"
     try:
         with open(filepath, "r") as f:
@@ -64,32 +43,18 @@ def compare_algorithms(
     n_episodes: int = 100,
     seed: int = 42,
 ) -> Dict[str, Dict[str, Any]]:
-    """
-    Evaluate and compare all three algorithms.
-
-    Args:
-        n_episodes: Number of evaluation episodes per algorithm.
-        seed: Random seed for reproducible evaluation.
-
-    Returns:
-        Dict mapping algorithm names to their evaluation results.
-    """
-    print("\n" + "=" * 70)
-    print("  Algorithm Comparison — PPO vs SAC vs TD3")
-    print("  Low-Cost Drone Interception via Reinforcement Learning")
-    print("=" * 70)
+    """Evaluate and compare all three algorithms."""
+    print("\nAlgorithm Comparison")
 
     results = {}
 
     for algo_name, config in ALGORITHMS.items():
         model_path = config["model_path"]
         if not os.path.exists(model_path):
-            print(f"\n  ⚠ {algo_name} model not found at {model_path} — skipping")
+            print(f"  ⚠ {algo_name} model not found: {model_path}")
             continue
 
-        print(f"\n{'─' * 50}")
-        print(f"  Evaluating {algo_name}...")
-        print(f"{'─' * 50}")
+        print(f"\n  Evaluating {algo_name}...")
 
         algo_results = evaluate_model(
             model_path=model_path,
@@ -104,22 +69,14 @@ def compare_algorithms(
 
 
 def print_comparison_table(results: Dict[str, Dict[str, Any]]) -> None:
-    """
-    Print a formatted comparison table of all algorithms.
-
-    Args:
-        results: Dict mapping algorithm names to evaluation results.
-    """
+    """Print formatted comparison table."""
     if not results:
         print("  No results to compare.")
         return
 
-    print("\n")
-    print("=" * 85)
-    print("  ALGORITHM COMPARISON — Drone Interception Performance")
-    print("=" * 85)
+    print("\n" + "=" * 70)
+    print("  Comparison")
 
-    # Header
     header = (
         f"  {'Algorithm':<12s} │ {'Intercept%':>10s} │ {'Collision%':>10s} │ "
         f"{'Avg Rew':>8s} │ {'Avg Steps':>10s} │ {'$/Intercept':>13s}"
@@ -153,12 +110,7 @@ def print_comparison_table(results: Dict[str, Dict[str, Any]]) -> None:
 
 
 def plot_learning_curves(results: Dict[str, Dict[str, Any]]) -> None:
-    """
-    Plot learning curves (reward vs timesteps) for all algorithms.
-
-    Loads training metrics from JSON files and plots them on the same axes
-    for direct comparison.
-    """
+    """Plot learning curves for all algorithms."""
     os.makedirs("./plots", exist_ok=True)
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
