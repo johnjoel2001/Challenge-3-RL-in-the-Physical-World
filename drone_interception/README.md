@@ -129,7 +129,6 @@ A **4-stage fully autonomous** detection and interception pipeline with **zero h
 | Edge Inference | `TensorRT` on Jetson Nano |
 | Backend API | `FastAPI` + Python |
 | Frontend Demo | `React` + `MapLibre GL` + `deck.gl` |
-| Dashboard | `Streamlit` |
 | Training Monitoring | `TensorBoard` |
 
 ### Architecture Diagram
@@ -386,14 +385,6 @@ npm run dev    # http://localhost:3000
 | `DomainRand` | `src/components/DomainRand.jsx` | Live display of randomized physics parameters |
 | `DetectionLog` | `src/components/DetectionLog.jsx` | Scrolling event log of detection phases |
 
-### Streamlit Dashboard
-
-```bash
-streamlit run dashboard/app.py
-```
-
-Interactive dashboard with training metrics, 3D trajectory visualization, and algorithm comparison.
-
 ---
 
 ## Quick Start
@@ -418,7 +409,6 @@ stable-baselines3>=2.1.0
 numpy>=1.24.0
 matplotlib>=3.7.0
 tensorboard>=2.14.0
-streamlit>=1.28.0
 plotly>=5.17.0
 ```
 
@@ -453,9 +443,6 @@ python -m uvicorn backend.server:app --reload --port 8000
 
 # Terminal 2: Frontend
 cd react-demo && npm install && npm run dev
-
-# OR: Streamlit dashboard
-streamlit run dashboard/app.py
 ```
 
 ### 6. Monitor Training
@@ -522,9 +509,6 @@ drone_interception/
 │   │       ├── DomainRand.jsx          # Live DR parameter display
 │   │       └── DetectionLog.jsx        # Scrolling event log
 │   └── vite.config.js
-│
-├── dashboard/                          # Streamlit interactive dashboard
-│   └── app.py                          # Training metrics, 3D viz, algo comparison
 │
 ├── demo/                               # Terminal-based demo
 │   └── command_center.py               # ASCII command center visualization
@@ -631,7 +615,6 @@ See [docs/cost_analysis.md](docs/cost_analysis.md) for the full breakdown.
 | Frontend | React + MapLibre GL + deck.gl | 18.3 / 5.22 / 9.0 |
 | Backend | FastAPI | latest |
 | Build Tool | Vite | 5.4 |
-| Dashboard | Streamlit | >=1.28.0 |
 | Visualization | Matplotlib + Plotly | >=3.7 / >=5.17 |
 | Monitoring | TensorBoard | >=2.14.0 |
 
