@@ -1,6 +1,5 @@
 """Interactive dashboard for RL-trained drone interception agents.
 
-Run: streamlit run dashboard/app.py
 """
 
 import os
@@ -26,9 +25,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# =============================================================================
-# CUSTOM CSS for polished appearance
-# =============================================================================
 st.markdown("""
 <style>
     .main-header {
@@ -65,16 +61,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# =============================================================================
-# HEADER
-# =============================================================================
 st.markdown('<div class="main-header">Low-Cost Drone Interception via RL</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Training a $300 drone to do the job of a $3M missile</div>', unsafe_allow_html=True)
 
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
 
 def load_json_safe(filepath: str) -> Optional[Dict]:
     """Load JSON file with error handling."""
@@ -87,14 +76,28 @@ def load_json_safe(filepath: str) -> Optional[Dict]:
 
 def try_load_model(algo_name: str):
     """Try to load a trained SB3 model."""
-    model_path = f"./models/{algo_name}_interceptor.zip"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    drone_dir = os.path.dirname(script_dir)
+    project_dir = os.path.dirname(drone_dir)
+    model_path = os.path.join(drone_dir, "models", f"{algo_name}_interceptor.zip")
+
     if not os.path.exists(model_path):
+        st.warning(f"Model file not found: {model_path}")
         return None
+    
     try:
         from stable_baselines3 import PPO, SAC, TD3
         algo_map = {"ppo": PPO, "sac": SAC, "td3": TD3}
-        return algo_map[algo_name].load(model_path)
-    except Exception:
+        loaded_model = algo_map[algo_name].load(model_path)
+        st.success(f"Loaded {algo_name.upper()} model")
+        return loaded_model
+    except ModuleNotFoundError as e:
+        st.error("stable-baselines3 not installed. Install with: pip install stable-baselines3")
+        return None
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load {algo_name.upper()} model: {str(e)}")
+        st.code(traceback.format_exc())
         return None
 
 
@@ -121,6 +124,7 @@ def run_demo_episode(
 
     int_positions = [env.interceptor_pos.copy()]
     tgt_positions = [env.target_pos.copy()]
+
     rewards_log = []
     prev_distance = info["distance"]
 
@@ -158,9 +162,12 @@ def run_demo_episode(
     cost_summary = cost_tracker.get_episode_summary()
     env.close()
 
+    int_traj_array = np.array(int_positions)
+    tgt_traj_array = np.array(tgt_positions)
+
     return {
-        "interceptor_trajectory": np.array(int_positions),
-        "target_trajectory": np.array(tgt_positions),
+        "interceptor_trajectory": int_traj_array,
+        "target_trajectory": tgt_traj_array,
         "rewards": rewards_log,
         "intercepted": info.get("intercepted", False),
         "collision": info.get("collision", False),
@@ -180,9 +187,6 @@ def run_demo_episode(
     }
 
 
-# =============================================================================
-# TABS
-# =============================================================================
 tab1, tab2, tab3, tab4 = st.tabs([
     "Live Demo",
     "Algorithm Comparison",
@@ -191,9 +195,6 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 
-# =============================================================================
-# TAB 1: LIVE DEMO
-# =============================================================================
 with tab1:
     st.header("Live Interception Demo")
     st.markdown("Adjust parameters and watch the trained agent pursue the target drone.")
@@ -366,19 +367,20 @@ with tab1:
         st.plotly_chart(fig_reward, use_container_width=True)
 
 
-# =============================================================================
-# TAB 2: ALGORITHM COMPARISON
-# =============================================================================
 with tab2:
     st.header("Algorithm Comparison: PPO vs SAC vs TD3")
 
     # Try to load pre-computed comparison results
-    comparison_data = load_json_safe("./results/comparison_results.json")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(script_dir)
+    comparison_file = os.path.join(project_dir, "results", "comparison_results.json")
+    comparison_data = load_json_safe(comparison_file)
 
     # Also try to load individual training metrics
     algo_metrics = {}
     for algo in ["ppo", "sac", "td3"]:
-        data = load_json_safe(f"./results/{algo}_metrics.json")
+        metrics_file = os.path.join(project_dir, "results", f"{algo}_metrics.json")
+        data = load_json_safe(metrics_file)
         if data:
             algo_metrics[algo.upper()] = data
 
@@ -484,9 +486,6 @@ with tab2:
         )
 
 
-# =============================================================================
-# TAB 3: COST ANALYSIS
-# =============================================================================
 with tab3:
     st.header("Cost-Effectiveness Analysis")
     st.markdown("**Our thesis**: RL-trained pursuit drones achieve a **1000x cost reduction** "
@@ -608,9 +607,6 @@ with tab3:
     )
 
 
-# =============================================================================
-# TAB 4: SIM2REAL CHALLENGES
-# =============================================================================
 with tab4:
     st.header("Sim-to-Real Transfer Challenges")
 
@@ -691,9 +687,6 @@ with tab4:
     st.table(param_table)
 
 
-# =============================================================================
-# SIDEBAR INFO
-# =============================================================================
 with st.sidebar:
     st.markdown("---")
     st.markdown("### About This Project")

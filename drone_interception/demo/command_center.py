@@ -1,6 +1,5 @@
 """Counter-UAS command center with RF detection, YOLO camera, and RL interception.
 
-Run: streamlit run demo/command_center.py
 """
 
 import os, sys, math, time

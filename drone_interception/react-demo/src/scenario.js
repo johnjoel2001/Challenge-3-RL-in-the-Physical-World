@@ -107,15 +107,18 @@ export function generateScenario(baseName, seed = 42) {
   const killFrame = Math.min(TOTAL_FRAMES - 1, Math.floor(killT * (TOTAL_FRAMES - 1)));
   const [interceptLat, interceptLon] = advPath[killFrame];
 
-  // Bezier control point: midpoint of base→kill, offset slightly toward the adversary path
-  // This keeps the curve between base and kill — no overshoot / backtrack
-  const midPursuitFrame = Math.floor(((yoloT + killT) / 2) * (TOTAL_FRAMES - 1));
-  const [advMidLat, advMidLon] = advPath[Math.min(midPursuitFrame, killFrame)];
-  const midLat = (baseLat + interceptLat) / 2;
-  const midLon = (baseLon + interceptLon) / 2;
-  // 50% offset toward adversary mid-position — visible curve, no overshoot
-  const ctrlLat = midLat + 0.5 * (advMidLat - midLat);
-  const ctrlLon = midLon + 0.5 * (advMidLon - midLon);
+  // Bezier control point: 40% along base→kill, with small perpendicular offset
+  // This creates a gentle curve WITHOUT overshooting past the interception point
+  const fracLat = baseLat + 0.4 * (interceptLat - baseLat);
+  const fracLon = baseLon + 0.4 * (interceptLon - baseLon);
+  // Small perpendicular offset for a natural pursuit arc (not a straight line)
+  const dLat0 = interceptLat - baseLat;
+  const dLon0 = interceptLon - baseLon;
+  const perpLat = -dLon0;  // perpendicular direction
+  const perpLon = dLat0;
+  const perpScale = 0.06;  // small offset — visible curve, no overshoot
+  const ctrlLat = fracLat + perpLat * perpScale;
+  const ctrlLon = fracLon + perpLon * perpScale;
 
   const frames = [];
   for (let i = 0; i < TOTAL_FRAMES; i++) {

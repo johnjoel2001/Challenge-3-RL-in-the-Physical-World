@@ -1,30 +1,34 @@
-"""Backend for geospatial scenario generation using trained PPO model."""
+"""
+FastAPI backend that runs the actual PPO model in the DroneInterceptionEnv
+and returns episode frames mapped to geographic coordinates for the React demo.
+"""
 
 import os
 import sys
 import math
-from typing import Tuple
-
 import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from stable_baselines3 import PPO
+from typing import Optional
 
-from core.drone_env import DroneInterceptionEnv
-from core.domain_randomization import DomainRandomizationWrapper
-
-# Set up path for local imports
+# Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-# Load PPO model at startup
+from stable_baselines3 import PPO
+from core.drone_env import DroneInterceptionEnv
+from core.domain_randomization import DomainRandomizationWrapper
+
+# ── Load model once at startup ──
 MODEL_PATH = os.path.join(PROJECT_ROOT, "models", "ppo_interceptor.zip")
 print(f"Loading PPO model from {MODEL_PATH} ...")
 model = PPO.load(MODEL_PATH)
 print("Model loaded successfully.")
 
-# Geographic origins (launch/detection sites)
+# ── Geographic data ──
 IRAN_LAUNCH_SITES = [
     {"label": "Bandar-e Shahid Rajaee", "lat": 27.12, "lon": 56.06},
     {"label": "Bushehr", "lat": 28.97, "lon": 50.84},
@@ -33,13 +37,17 @@ IRAN_LAUNCH_SITES = [
     {"label": "Chabahar", "lat": 25.29, "lon": 60.62},
 ]
 
-# Defender airbases
 AIRBASES = {
     "Al Dhafra AB, UAE": {"lat": 24.2481, "lon": 54.5472},
     "Camp Arifjan, Kuwait": {"lat": 29.3417, "lon": 47.9775},
     "Prince Sultan AB, KSA": {"lat": 24.0627, "lon": 47.5802},
 }
 
+# ── Phase thresholds (fraction of episode steps) ──
+PHASE_RF_FRAC = 0.50
+PHASE_YOLO_FRAC = 0.55
+
+# ── FastAPI app ──
 app = FastAPI(title="Counter-UAS PPO Backend")
 app.add_middleware(
     CORSMiddleware,
@@ -55,135 +63,91 @@ class ScenarioRequest(BaseModel):
     drEnabled: bool = True
 
 
-def pick_iran_site(rng: np.random.Generator) -> Tuple[str, float, float]:
-    """Select random launch site for scenario variety."""
-    site = IRAN_LAUNCH_SITES[rng.integers(0, len(IRAN_LAUNCH_SITES))]
+def pick_iran_site(rng):
+    idx = rng.integers(0, len(IRAN_LAUNCH_SITES))
+    site = IRAN_LAUNCH_SITES[idx]
     return site["label"], site["lat"], site["lon"]
 
 
-def run_ppo_episode(seed: int, use_domain_randomization: bool) -> Tuple[list, bool, dict]:
-    """Execute one episode to capture both the decision trajectory and physical parameters.
-    
-    Trajectory shapes the geographic path; DR params calibrate visualization realism.
+def run_ppo_episode(seed: int, use_dr: bool):
     """
-    env = DroneInterceptionEnv(render_mode=None)
-    if use_domain_randomization:
-        env = DomainRandomizationWrapper(env)
-
-    obs, info = env.reset(seed=seed)
-    trajectory = []
-    intercepted = False
-    dr_params = info.get("domain_randomization", {})
-
-    done = False
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
-
-        int_pos = env.unwrapped.interceptor_pos.copy()
-        tgt_pos = env.unwrapped.target_pos.copy()
-        dist = np.linalg.norm(int_pos - tgt_pos)
-
-        if info.get("intercepted", False):
-            intercepted = True
-
-        trajectory.append({
-            "int_pos": int_pos,
-            "tgt_pos": tgt_pos,
-            "dist": float(dist),
-            "intercepted": intercepted,
-        })
-
-    env.close()
-    return trajectory, intercepted, dr_params
-
-
-def lerp(start: float, end: float, t: float) -> float:
-    """Linear interpolation; fast and predictable for trajectory blending."""
-    return start + (end - start) * t
-
-
-def compute_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Bearing for flight displays; front-end needs cardinal direction."""
-    d_lat = lat2 - lat1
-    d_lon = lon2 - lon1
-    bearing = (math.degrees(math.atan2(d_lon, d_lat)) + 360) % 360
-    return bearing
-
-
-def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Fast distance approximation for telemetry; sufficient at regional scales."""
-    # 111 km per degree is accurate enough; great-circle overkill for dashboard
-    d_lat = lat2 - lat1
-    d_lon = lon2 - lon1
-    return math.sqrt(
-        (d_lat * 111) ** 2 + (d_lon * 111 * math.cos(math.radians(lat1))) ** 2
-    )
-
-
-def build_adversary_path(
-    rng: np.random.Generator,
-    start_lat: float,
-    start_lon: float,
-    target_lat: float,
-    target_lon: float,
-    arena_y: list,
-    num_frames: int,
-) -> list:
-    """Blend PPO evasion patterns into realistic geographic travel.
-    
-    Uses arena trajectories to inform lateral drift; maintains smooth motion for visuals.
+    Run one full episode using the trained PPO model.
+    If the episode ends too early (collision/OOB < 80 steps), retry with
+    seed offsets to find a meaningful chase. Returns trajectory, outcome, DR params.
     """
-    dlat = target_lat - start_lat
-    dlon = target_lon - start_lon
-    route_len = math.sqrt(dlat ** 2 + dlon ** 2)
+    best_traj = None
+    best_intercepted = False
+    best_dr = {}
+    best_reason = "timeout"
 
-    # Compute perpendicular to route for left-right drift (evasive maneuvers)
-    if route_len > 1e-6:
-        perp_x = -dlon / route_len
-        perp_y = dlat / route_len
-    else:
-        perp_x, perp_y = 0, 0
+    # Try up to 5 seed offsets to get a good episode (>80 steps or intercepted)
+    for attempt in range(5):
+        actual_seed = seed + attempt * 1000
 
-    drift_scale = rng.uniform(0.03, 0.07)
-    arena_size = 10.0
-    path = []
+        env = DroneInterceptionEnv(render_mode=None)
+        if use_dr:
+            env = DomainRandomizationWrapper(env)
 
-    # Track smoothed position to apply momentum; avoids jittery paths
-    curr_lat, curr_lon = start_lat, start_lon
+        obs, info = env.reset(seed=actual_seed)
 
-    for i in range(num_frames):
-        frac = i / (num_frames - 1)
-        momentum = 0.6 + 0.4 * frac
+        trajectory = []
+        done = False
+        step_count = 0
+        intercepted = False
+        dr_params = info.get("domain_randomization", {})
+        reason = "timeout"
 
-        # Intended waypoint along straight line
-        target = lerp(start_lat, target_lat, frac)
-        target_lon_val = lerp(start_lon, target_lon, frac)
+        while not done:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            step_count += 1
 
-        # Translate PPO's arena Y (evasion axis) to geographic lateral drift
-        # Falls back to random walk if trajectory runs short
-        if i < len(arena_y):
-            lateral_offset = (arena_y[i] / arena_size) * drift_scale * route_len * 0.5
-        else:
-            lateral_offset = rng.normal(0, drift_scale) * (1 - 0.5 * frac)
+            int_pos = env.unwrapped.interceptor_pos.copy()
+            tgt_pos = env.unwrapped.target_pos.copy()
+            dist = np.linalg.norm(int_pos - tgt_pos)
 
-        # Gradual approach to target reduces discontinuities in geospatial playback
-        noise_mag = drift_scale * (1 - 0.5 * frac)
-        curr_lat += (target - curr_lat) * momentum * 0.15 + rng.normal(0, noise_mag)
-        curr_lon += (target_lon_val - curr_lon) * momentum * 0.15 + rng.normal(0, noise_mag)
+            if info.get("intercepted", False):
+                intercepted = True
+                reason = "intercepted"
+            elif info.get("collision", False):
+                reason = "collision"
+            elif info.get("out_of_bounds", False):
+                reason = "out_of_bounds"
 
-        # Apply lateral offset perpendicular to route
-        lat = curr_lat + lateral_offset * perp_x
-        lon = curr_lon + lateral_offset * perp_y
-        path.append((lat, lon))
+            # action is normalized [-1,1]; real thrust = action * max_force
+            max_f = env.unwrapped.max_force
+            thrust = action * max_f
+            trajectory.append({
+                "int_pos": int_pos,
+                "tgt_pos": tgt_pos,
+                "thrust": thrust.copy(),
+                "dist": float(dist),
+                "intercepted": intercepted,
+            })
 
-    return path
+        env.close()
+
+        # Keep the best episode (intercepted > long episode > short episode)
+        if best_traj is None or intercepted or (not best_intercepted and len(trajectory) > len(best_traj)):
+            best_traj = trajectory
+            best_intercepted = intercepted
+            best_dr = dr_params
+            best_reason = reason
+
+        # Good enough — intercepted or ran long enough
+        if intercepted or len(trajectory) >= 80:
+            break
+
+    return best_traj, best_intercepted, best_dr, best_reason
+
+
+def lerp(a, b, t):
+    return a + (b - a) * t
 
 
 @app.post("/api/scenario")
 def generate_scenario(req: ScenarioRequest):
-    """Build playable scenario; blend PPO decisions with geographic realism for frontend."""
     base = AIRBASES.get(req.baseName)
     if not base:
         return {"error": f"Unknown base: {req.baseName}"}
@@ -192,101 +156,141 @@ def generate_scenario(req: ScenarioRequest):
     rng = np.random.default_rng(req.seed)
     iran_label, iran_lat, iran_lon = pick_iran_site(rng)
 
-    # Run PPO once to extract arena trajectory and learned intercept dynamics
-    trajectory, intercepted, dr_params = run_ppo_episode(req.seed, req.drEnabled)
-    arena_y = [t["tgt_pos"][1] for t in trajectory]
+    # ── 1. Run PPO model to get outcome + DR params ──
+    trajectory, intercepted, dr_params, reason = run_ppo_episode(req.seed, req.drEnabled)
     total_env_steps = len(trajectory)
 
-    # Smooth playback; 150-frame minimum ensures responsive visualization
-    num_frames = max(total_env_steps, 150)
+    # Extract target Y-positions from arena for zig-zag lateral drift
+    arena_y = [t["tgt_pos"][1] for t in trajectory]
+    arena_size = 10.0
 
-    # Randomize phase timings slightly; avoids unrealistic patterns across scenarios
-    phase_rf = 0.50 + rng.uniform(-0.08, 0.05)
-    phase_yolo = 0.55 + rng.uniform(-0.03, 0.03)
-    phase_kill = 0.90 + rng.uniform(-0.03, 0.03)  # Kill before base to show interception
+    # ── 2. Build geographic frames ──
+    # Use a fixed number of display frames for smooth playback
+    N = max(total_env_steps, 150)
+    PHASE_RF = 0.50 + rng.uniform(-0.08, 0.05)
+    PHASE_YOLO = 0.55 + rng.uniform(-0.03, 0.03)
+    # Kill at ~90% of the journey — well before reaching base
+    PHASE_KILL = 0.90 + rng.uniform(-0.03, 0.03)
 
-    rf_frame = int(phase_rf * (num_frames - 1))
-    yolo_frame = int(phase_yolo * (num_frames - 1))
-    kill_frame = int(phase_kill * (num_frames - 1))
+    rf_frame = int(PHASE_RF * (N - 1))
+    yolo_frame = int(PHASE_YOLO * (N - 1))
+    kill_frame = int(PHASE_KILL * (N - 1))
 
-    # Generate adversary path
-    adv_path = build_adversary_path(
-        rng, iran_lat, iran_lon, base_lat, base_lon, arena_y, num_frames
-    )
+    # ── 3. Adversary zig-zag path: Iran → Base with lateral drift ──
+    dlat = base_lat - iran_lat
+    dlon = base_lon - iran_lon
+    route_len = math.sqrt(dlat ** 2 + dlon ** 2)
+    # Perpendicular vector for lateral offset
+    if route_len > 1e-6:
+        px, py = -dlon / route_len, dlat / route_len
+    else:
+        px, py = 0, 0
+
+    drift_scale = rng.uniform(0.03, 0.07)
+    adv_path = []
+    adv_lat_c, adv_lon_c = iran_lat, iran_lon
+    for i in range(N):
+        frac = i / (N - 1)
+        pull = 0.6 + 0.4 * frac
+        tgt_lat = lerp(iran_lat, base_lat, frac)
+        tgt_lon = lerp(iran_lon, base_lon, frac)
+        # Use arena Y for zig-zag when available, else random walk
+        if i < len(arena_y):
+            lateral = (arena_y[i] / arena_size) * drift_scale * route_len * 0.5
+        else:
+            lateral = rng.normal(0, drift_scale) * (1 - 0.5 * frac)
+        adv_lat_c += (tgt_lat - adv_lat_c) * pull * 0.15 + rng.normal(0, drift_scale) * (1 - 0.5 * frac)
+        adv_lon_c += (tgt_lon - adv_lon_c) * pull * 0.15 + rng.normal(0, drift_scale) * (1 - 0.5 * frac)
+        # Add zig-zag lateral offset from PPO arena
+        lat = adv_lat_c + lateral * px
+        lon = adv_lon_c + lateral * py
+        adv_path.append((lat, lon))
+
+    # Freeze adversary at kill point after interception
     kill_lat, kill_lon = adv_path[kill_frame]
 
-    # Bezier curve follows adversary's mid-pursuit position; looks natural for intercept animation
-    mid_frame = (yolo_frame + kill_frame) // 2
-    adv_mid_lat, adv_mid_lon = adv_path[mid_frame]
-    mid_lat = (base_lat + kill_lat) / 2
-    mid_lon = (base_lon + kill_lon) / 2
-    # Pull control point toward adversary's actual position—more realistic pursuit
-    ctrl_lat = mid_lat + 0.5 * (adv_mid_lat - mid_lat)
-    ctrl_lon = mid_lon + 0.5 * (adv_mid_lon - mid_lon)
+    # ── 4. Interceptor: Bezier pursuit from base to kill point ──
+    # Control point: 40% along base→kill with small perpendicular offset
+    # Creates a gentle curve WITHOUT overshooting past the interception point
+    frac_lat = base_lat + 0.4 * (kill_lat - base_lat)
+    frac_lon = base_lon + 0.4 * (kill_lon - base_lon)
+    d_lat0 = kill_lat - base_lat
+    d_lon0 = kill_lon - base_lon
+    perp_lat = -d_lon0   # perpendicular direction
+    perp_lon = d_lat0
+    perp_scale = 0.06    # small offset — visible curve, no overshoot
+    ctrl_lat = frac_lat + perp_lat * perp_scale
+    ctrl_lon = frac_lon + perp_lon * perp_scale
 
-    # Build frame-by-frame data
+    # ── 5. Build frame array ──
     frames = []
-    for i in range(num_frames):
-        frac = i / (num_frames - 1)
+    for i in range(N):
+        frac = i / (N - 1)
 
-        # Phase progression mirrors sensor capability and intercept timeline
+        # Phase
         if i < rf_frame:
-            phase_name, phase_num = "CROSSING", 1
+            phase, pn = "CROSSING", 1
         elif i < yolo_frame:
-            phase_name, phase_num = "RF DETECTED", 2
+            phase, pn = "RF DETECTED", 2
         elif i < kill_frame:
-            phase_name, phase_num = "PURSUING", 3
+            phase, pn = "PURSUING", 3
         else:
-            phase_name, phase_num = "INTERCEPTED", 4
+            phase, pn = "INTERCEPTED", 4
 
-        # Adversary position (stays frozen after interception)
+        # Adversary position (freeze after kill)
         if i <= kill_frame:
             adv_lat, adv_lon = adv_path[i]
         else:
             adv_lat, adv_lon = kill_lat, kill_lon
 
-        # Interceptor launches only after detection; smooth arc is visually superior to straight lines
+        # Interceptor: Bezier pursuit curve
         if i < yolo_frame:
             int_lat, int_lon = base_lat, base_lon
         elif i <= kill_frame:
-            # Quadratic Bezier smoothly transitions via control point
-            t = (i - yolo_frame) / max(kill_frame - yolo_frame, 1)
-            a = (1 - t) ** 2
-            b = 2 * (1 - t) * t
-            c = t ** 2
+            pt = (i - yolo_frame) / max(kill_frame - yolo_frame, 1)
+            a = (1 - pt) ** 2
+            b = 2 * (1 - pt) * pt
+            c = pt ** 2
             int_lat = a * base_lat + b * ctrl_lat + c * kill_lat
             int_lon = a * base_lon + b * ctrl_lon + c * kill_lon
         else:
             int_lat, int_lon = kill_lat, kill_lon
 
-        # Compute telemetry
-        dist_km_val = distance_km(base_lat, base_lon, adv_lat, adv_lon)
-        bearing_val = compute_bearing(base_lat, base_lon, adv_lat, adv_lon)
+        # Telemetry
+        d_lat = adv_lat - base_lat
+        d_lon = adv_lon - base_lon
+        dist_km = math.sqrt(
+            (d_lat * 111) ** 2 + (d_lon * 111 * math.cos(math.radians(base_lat))) ** 2
+        )
+        bearing = (math.degrees(math.atan2(d_lon, d_lat)) + 360) % 360
 
-        # Confidence reflects system certainty; zero until RF detection, then builds
-        if phase_num <= 1:
-            confidence = 0.0
-        elif phase_num == 2:
-            # Early RF lock carries uncertainty; wide variance
-            confidence = round(float(rng.uniform(0.25, 0.50)), 2)
+        if pn <= 1:
+            yc = 0.0
+        elif pn == 2:
+            yc = round(float(rng.uniform(0.25, 0.50)), 2)
         else:
-            # Track quality improves over pursuit window
-            confidence = min(
-                0.99,
-                max(
-                    0.50,
-                    0.55 + (frac - phase_yolo) * 3.0 + rng.normal(0, 0.03),
-                ),
-            )
-            confidence = round(float(confidence), 2)
+            yc = round(float(min(0.99, max(0.50, 0.55 + (frac - PHASE_YOLO) * 3.0 + rng.normal(0, 0.03)))), 2)
 
-        # Altitude: adversary cruises high, interceptor launches and climbs
-        adv_alt = 500 + rng.normal(0, 20)
-        if phase_num <= 2:
-            int_alt = 100.0
-        else:
-            # Interceptor altitude ramps toward adversary during pursuit
-            int_alt = np.interp(frac, [phase_yolo, 1.0], [100, adv_alt])
+        adv_alt = float(500 + rng.normal(0, 20))
+        int_alt = 100.0 if pn <= 2 else float(np.interp(frac, [PHASE_YOLO, 1.0], [100, adv_alt]))
+        brg = round(bearing, 1)
+
+        # Map pursuing-phase frames to PPO trajectory for arena xyz + thrust
+        arena_data = {}
+        if pn >= 3 and total_env_steps > 0:
+            # Map pursuit progress to trajectory index
+            pursuit_frac = (i - yolo_frame) / max(kill_frame - yolo_frame, 1)
+            pursuit_frac = max(0.0, min(1.0, pursuit_frac))
+            tj_idx = min(int(pursuit_frac * (total_env_steps - 1)), total_env_steps - 1)
+            t_step = trajectory[tj_idx]
+            arena_data = {
+                "ax": round(float(t_step["tgt_pos"][0]), 2),
+                "ay": round(float(t_step["tgt_pos"][1]), 2),
+                "az": round(float(t_step["tgt_pos"][2]), 2),
+                "tx": round(float(t_step["thrust"][0]), 2),
+                "ty": round(float(t_step["thrust"][1]), 2),
+                "tz": round(float(t_step["thrust"][2]), 2),
+            }
 
         frames.append({
             "step": i + 1,
@@ -297,14 +301,15 @@ def generate_scenario(req: ScenarioRequest):
             "intLat": round(int_lat, 6),
             "intLon": round(int_lon, 6),
             "intAlt": round(int_alt, 1),
-            "distKm": round(dist_km_val, 1),
-            "bearing": round(bearing_val, 1),
-            "phase": phase_name,
-            "pn": phase_num,
-            "yc": confidence,
+            "distKm": round(dist_km, 1),
+            "bearing": brg,
+            "phase": phase,
+            "pn": pn,
+            "yc": yc,
+            **arena_data,
         })
 
-    # Package DR params for transparency; shows what physical variations were in play
+    # Domain randomization params for display
     dr_display = None
     if dr_params:
         dr_display = {
@@ -329,12 +334,64 @@ def generate_scenario(req: ScenarioRequest):
     }
 
 
+@app.post("/api/scenario3d")
+def generate_scenario_3d(req: ScenarioRequest):
+    """
+    Run PPO episode and return raw 3D arena positions for Three.js visualization.
+    Returns every Nth frame to keep payload manageable.
+    """
+    trajectory, intercepted, dr_params, reason = run_ppo_episode(req.seed, req.drEnabled)
+
+    # Sample frames for smooth playback (every 2nd frame, or all if short)
+    step = max(1, len(trajectory) // 250)
+    sampled = trajectory[::step]
+    # Always include the last frame
+    if sampled[-1] is not trajectory[-1]:
+        sampled.append(trajectory[-1])
+
+    frames = []
+    for i, t in enumerate(sampled):
+        frames.append({
+            "ix": round(float(t["int_pos"][0]), 3),
+            "iy": round(float(t["int_pos"][2]), 3),   # z -> y (up) in Three.js
+            "iz": round(float(t["int_pos"][1]), 3),
+            "tx": round(float(t["tgt_pos"][0]), 3),
+            "ty": round(float(t["tgt_pos"][2]), 3),
+            "tz": round(float(t["tgt_pos"][1]), 3),
+            "dist": round(t["dist"], 3),
+            "intercepted": t["intercepted"],
+        })
+
+    return {
+        "frames": frames,
+        "totalSteps": len(trajectory),
+        "intercepted": intercepted,
+        "reason": reason,
+        "drParams": dr_params if req.drEnabled else None,
+        "arenaSize": 20,
+    }
+
+
 @app.get("/api/health")
 def health():
-    """Quick liveness check for orchestration."""
     return {"status": "ok", "model": "ppo_interceptor"}
+
+
+# ── Serve built React frontend (for Railway deployment) ──
+STATIC_DIR = os.path.join(PROJECT_ROOT, "react-demo", "dist")
+if os.path.isdir(STATIC_DIR):
+    app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    def serve_frontend(full_path: str):
+        # Serve specific files if they exist, otherwise index.html (SPA fallback)
+        file_path = os.path.join(STATIC_DIR, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -9,6 +9,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from typing import Optional, Tuple, Dict, Any, List
+
 try:
     import pybullet as p
     import pybullet_data
@@ -34,11 +35,13 @@ DRONE_RADIUS = 0.2       # Meters; collision radius
 NUM_OBSTACLES = 5        # Number of obstacles
 EVADER_SPEED = 2.0       # m/s; typical drone cruising speed
 
-# Simulation
-DT = 1.0 / 60.0          # 60Hz physics loop (standard for flight controllers)
-GRAVITY = 9.81           # m/s^2; can be randomized for sim2real
+# Simulation parameters
+DT = 1.0 / 60.0          # Timestep — 60Hz physics, matching real flight controllers
+GRAVITY = 9.81            # m/s^2 — standard gravity (can be randomized for sim2real)
 
-# Obstacle sensors: 5 rays for proximity detection
+# Raycast directions for obstacle detection — 5 rays from interceptor
+# These simulate obstacle proximity sensing — in deployment, estimated from
+# base-station camera depth perception or pre-loaded 3D terrain maps
 RAY_DIRECTIONS = [
     np.array([1, 0, 0], dtype=np.float64),    # Forward
     np.array([-1, 0, 0], dtype=np.float64),   # Backward
@@ -94,17 +97,14 @@ class DroneInterceptionEnv(gym.Env):
         self.gravity = gravity
         self.render_mode = render_mode
 
-        # PyBullet for GUI rendering, NumPy backend for fast training
         self._use_pybullet = PYBULLET_AVAILABLE and (render_mode == "human")
         if not PYBULLET_AVAILABLE:
             self._use_pybullet = False
 
-        # Action space: [0,0,0] = hover; x,y,z thrust normalized to [-1,1]
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(3,), dtype=np.float32
         )
 
-        # Observation: 21 dims with wide bounds to prevent clipping
         obs_low = -np.ones(21, dtype=np.float32) * 50.0
         obs_high = np.ones(21, dtype=np.float32) * 50.0
         self.observation_space = spaces.Box(
@@ -172,22 +172,16 @@ class DroneInterceptionEnv(gym.Env):
         """Reset episode: spawn drones randomly, place obstacles, return initial observation."""
         super().reset(seed=seed)
 
-        # Reset episode tracking
         self.step_count = 0
         self.cumulative_energy = 0.0
         self._evader_phase = self.np_random.uniform(0, 2 * np.pi)
 
-        # Spawn drones at random positions on opposite sides of the arena
         self._spawn_drones()
-
-        # Place random obstacles
         self._place_obstacles()
 
-        # Setup PyBullet scene if using it
         if self._use_pybullet:
             self._setup_pybullet_scene()
 
-        # Compute initial state
         self.prev_distance = np.linalg.norm(self.target_pos - self.interceptor_pos)
 
         obs = self._get_observation()
@@ -314,16 +308,13 @@ class DroneInterceptionEnv(gym.Env):
         self.step_count += 1
         action = np.clip(action, -1.0, 1.0).astype(np.float64)
 
-        # Thrust = action * max_force + hover thrust (so [0,0,0] maintains altitude)
         thrust = action * self.max_force
         hover_thrust = self.drone_mass * self.gravity
         thrust[2] += hover_thrust
 
-        # Drag prevents infinite acceleration
         drag_force = -self.drag_coeff * self.interceptor_vel
         total_force = thrust + drag_force
 
-        # Semi-implicit Euler integration (more stable)
         acceleration = total_force / self.drone_mass - np.array([0, 0, self.gravity])
         self.interceptor_vel += acceleration * DT
         self.interceptor_pos += self.interceptor_vel * DT
@@ -334,7 +325,6 @@ class DroneInterceptionEnv(gym.Env):
         # Update target drone
         self._update_evader()
 
-        # Sync PyBullet visuals if available
         if self._use_pybullet:
             p.resetBasePositionAndOrientation(
                 self.interceptor_id, self.interceptor_pos.tolist(), [0, 0, 0, 1],
@@ -344,7 +334,6 @@ class DroneInterceptionEnv(gym.Env):
                 physicsClientId=self.physics_client)
             p.stepSimulation(physicsClientId=self.physics_client)
 
-        # Check termination conditions
         distance = np.linalg.norm(self.target_pos - self.interceptor_pos)
         terminated = False
         truncated = False
@@ -358,27 +347,20 @@ class DroneInterceptionEnv(gym.Env):
             "steps": self.step_count,
         }
 
-        # Success: caught the target
         if distance < self.capture_distance:
             terminated = True
             info["intercepted"] = True
-
-        # Failure: crashed into obstacle
         elif self._check_obstacle_collision():
             terminated = True
             info["collision"] = True
-
-        # Failure: left arena
         elif self._check_out_of_bounds(self.interceptor_pos):
             terminated = True
             info["out_of_bounds"] = True
-
-        # Failure: timeout
         elif self.step_count >= self.max_steps:
             truncated = True
             info["timeout"] = True
 
-        # Update previous distance for next step's progress calculation
+        reward = self._compute_reward(action, distance, info)
         self.prev_distance = distance
 
         obs = self._get_observation()
@@ -389,12 +371,10 @@ class DroneInterceptionEnv(gym.Env):
         # Advance figure-8 phase
         self._evader_phase += DT * 0.5
 
-        # Base figure-8 motion — smooth continuous movement
         base_vx = self.evader_speed * np.cos(self._evader_phase)
         base_vy = self.evader_speed * np.sin(2 * self._evader_phase) * 0.5
         base_vz = self.evader_speed * 0.3 * np.sin(self._evader_phase * 1.5)
 
-        # Reactive evasion: when interceptor closes in, dodge proportionally (simple proximity logic)
         rel_vec = self.target_pos - self.interceptor_pos
         dist = np.linalg.norm(rel_vec)
         evasion = np.zeros(3)
@@ -403,11 +383,9 @@ class DroneInterceptionEnv(gym.Env):
             evasion_strength = (4.0 - dist) / 4.0 * self.evader_speed * 1.2
             evasion = (rel_vec / dist) * evasion_strength
 
-        # Add noise to break determinism
         noise = self.np_random.normal(0, 0.3, size=3)
-
-        # Combine all velocity components
         target_vel = np.array([base_vx, base_vy, base_vz]) + evasion + noise
+
         speed = np.linalg.norm(target_vel)
         max_evader_speed = self.evader_speed * 2.5
         if speed > max_evader_speed:
@@ -416,7 +394,6 @@ class DroneInterceptionEnv(gym.Env):
         self.target_vel = target_vel
         self.target_pos += self.target_vel * DT
 
-        # Keep target in bounds
         self.target_pos[0] = np.clip(
             self.target_pos[0], -self.arena_size * 0.9, self.arena_size * 0.9
         )
@@ -425,57 +402,44 @@ class DroneInterceptionEnv(gym.Env):
         )
         self.target_pos[2] = np.clip(self.target_pos[2], 1.0, self.arena_height - 0.5)
 
-    def _compute_reward(
-        self, action: np.ndarray, distance: float, info: Dict[str, Any]
-    ) -> float:
-        """Compute shaped reward for efficient interception (progress + bonus + penalties)."""
+    def _compute_reward(self, action: np.ndarray, distance: float, info: Dict[str, Any]) -> float:
+        """Compute shaped reward for this step."""
         reward = 0.0
 
-        # Progress: gradient toward target (zero if orbiting at same distance)
         progress = (self.prev_distance - distance) * 15.0
         reward += progress
 
-        # Interception bonus: big enough to beat any orbit strategy (time penalty -0.5/step adds up)
         if info["intercepted"]:
             steps_bonus = max(0, (self.max_steps - self.step_count)) * 0.5
             reward += 500.0 + steps_bonus
 
-        # Crash = drone destroyed
         if info["collision"]:
             reward -= 75.0
 
-        # Penalize excessive thrust (battery cost)
         energy_penalty = -0.02 * np.sum(action**2)
         reward += energy_penalty
 
-        # Time penalty: -0.5/step discourages hovering (500 steps = -250 penalty)
         reward -= 0.5
 
-        # Proximity bonus: mild signal to get closer (but won't compete with interception)
         if distance < 3.0:
             proximity_bonus = 1.0 / (distance + 0.3) - 0.3
             reward += max(0.0, proximity_bonus)
 
-        # Warn before collision (gradual signal, not just -75 at impact)
         obs_distances = self._raycast_obstacles()
         min_obs_dist = np.min(obs_distances)
         if min_obs_dist < 0.3:
             obstacle_warning = -3.0 * (0.3 - min_obs_dist) / 0.3
             reward += obstacle_warning
 
-        # Left the arena
         if info["out_of_bounds"]:
             reward -= 75.0
 
         return float(reward)
 
     def _get_observation(self) -> np.ndarray:
-        """Build 21-dim observation vector."""
-        # Relative vector
+        """Return 21-dim observation vector."""
         relative_pos = self.target_pos - self.interceptor_pos
         distance = np.linalg.norm(relative_pos)
-
-        # Obstacle proximity via raycasting
         obstacle_distances = self._raycast_obstacles()
 
         obs = np.concatenate([
@@ -523,6 +487,7 @@ class DroneInterceptionEnv(gym.Env):
         for i, direction in enumerate(RAY_DIRECTIONS):
             closest_frac = 1.0
 
+            # Test against each obstacle (AABB intersection)
             for obs_data in self.obstacles:
                 obs_min = obs_data["pos"] - obs_data["half_extents"]
                 obs_max = obs_data["pos"] + obs_data["half_extents"]
@@ -530,8 +495,10 @@ class DroneInterceptionEnv(gym.Env):
                 if frac is not None and frac < closest_frac:
                     closest_frac = frac
 
-            # Ground collision
-            if direction[2] < -1e-6:
+            # Test against ground plane (z = 0)
+            if direction[2] < -1e-6:  # Ray pointing downward
+                t = -origin[2] / (direction[2] * RAY_LENGTH)
+                # Normalize: t is fraction of unit direction, we need fraction of RAY_LENGTH
                 ground_frac = origin[2] / (abs(direction[2]) * RAY_LENGTH)
                 if 0 <= ground_frac < closest_frac:
                     closest_frac = ground_frac
@@ -549,7 +516,7 @@ class DroneInterceptionEnv(gym.Env):
     ) -> Optional[float]:
         """Slab method ray-AABB intersection; returns hit fraction [0,1] or None."""
         scaled_dir = direction * RAY_LENGTH
-        # Handle axis-aligned rays (avoid dividing by near-zero)
+        # Avoid division by zero for axis-aligned rays (e.g., direction=[1,0,0])
         safe_dir = np.where(np.abs(scaled_dir) > 1e-10, scaled_dir, 1e-10)
         inv_dir = 1.0 / safe_dir
 
@@ -575,6 +542,7 @@ class DroneInterceptionEnv(gym.Env):
         if self.interceptor_pos[2] < DRONE_RADIUS:
             return True
 
+        # AABB collision against each obstacle (expand box by drone radius)
         pos = self.interceptor_pos
         for obs_data in self.obstacles:
             obs_min = obs_data["pos"] - obs_data["half_extents"] - DRONE_RADIUS
@@ -588,7 +556,7 @@ class DroneInterceptionEnv(gym.Env):
         return False
 
     def _check_out_of_bounds(self, pos: np.ndarray) -> bool:
-        """Return True if position exceeds arena boundaries."""
+        """Check if a position is outside arena boundaries."""
         if abs(pos[0]) > self.arena_size:
             return True
         if abs(pos[1]) > self.arena_size:
@@ -597,25 +565,20 @@ class DroneInterceptionEnv(gym.Env):
             return True
         return False
 
-    # =========================================================================
-    # RENDERING & CLEANUP
     def render(self) -> None:
-        """Render environment (PyBullet GUI handles this automatically)."""
+        """Render the environment."""
         if self.render_mode == "human" and self._use_pybullet:
             import time
             time.sleep(DT)
 
     def close(self) -> None:
-        """Clean up PyBullet connection."""
+        """Clean up PyBullet connection when environment is destroyed."""
         self._disconnect_pybullet()
+
 
 if __name__ == "__main__":
     env = DroneInterceptionEnv(render_mode=None)
     obs, info = env.reset(seed=42)
-
-    print(f"Backend: {'PyBullet' if PYBULLET_AVAILABLE else 'NumPy'}")
-    print(f"Observation shape: {obs.shape}, range: [{obs.min():.2f}, {obs.max():.2f}]")
-    print(f"Initial distance: {info['distance']:.2f}m\n")
 
     total_reward = 0.0
     for step in range(100):
@@ -624,9 +587,6 @@ if __name__ == "__main__":
         total_reward += reward
 
         if terminated or truncated:
-            status = "intercepted" if info["intercepted"] else ("collision" if info["collision"] else ("timeout" if info["timeout"] else "oob"))
-            print(f"Episode ended at step {step + 1} ({status})")
-            print(f"Final distance: {info['distance']:.2f}m, reward: {total_reward:.2f}")
             break
 
     env.close()
