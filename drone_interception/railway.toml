@@ -3,8 +3,7 @@ builder = "nixpacks"
 
 [build.nixpacks]
 providers = ["python", "node"]
-installCmd = "pip install -r requirements.txt && cd react-demo && npm install"
-buildCmd = "cd react-demo && npm run build"
+buildCmd = "bash build.sh"
 
 [deploy]
 startCommand = "python3 backend/server.py"

@@ -379,7 +379,11 @@ def health():
 
 # ── Serve built React frontend (for Railway deployment) ──
 STATIC_DIR = os.path.join(PROJECT_ROOT, "react-demo", "dist")
+print(f"[STARTUP] PROJECT_ROOT = {PROJECT_ROOT}")
+print(f"[STARTUP] STATIC_DIR  = {STATIC_DIR}")
+print(f"[STARTUP] dist exists? = {os.path.isdir(STATIC_DIR)}")
 if os.path.isdir(STATIC_DIR):
+    print(f"[STARTUP] dist contents: {os.listdir(STATIC_DIR)}")
     app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
 
     @app.get("/{full_path:path}")
@@ -389,6 +393,8 @@ if os.path.isdir(STATIC_DIR):
         if full_path and os.path.isfile(file_path):
             return FileResponse(file_path)
         return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+else:
+    print(f"[STARTUP] WARNING: dist not found! react-demo contents: {os.listdir(os.path.join(PROJECT_ROOT, 'react-demo')) if os.path.isdir(os.path.join(PROJECT_ROOT, 'react-demo')) else 'react-demo NOT FOUND'}")
 
 
 if __name__ == "__main__":
