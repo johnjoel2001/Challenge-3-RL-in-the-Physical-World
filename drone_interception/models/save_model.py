@@ -1,13 +1,7 @@
-"""
-Save trained PPO model with full metadata for deployment and demo.
-
-Run:
-    python3 -m models.save_model
-"""
+"""Save trained PPO model with metadata."""
 import os
 import sys
 import json
-import shutil
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,7 +14,7 @@ def save_model_package():
     """Bundle model + metadata into a versioned deployment package."""
     src = os.path.join(MODEL_DIR, "ppo_interceptor.zip")
     if not os.path.exists(src):
-        print("No trained model found. Train first: python3 -m training.train_ppo --timesteps 1000000")
+        print("Model not found. Train first: python3 -m training.train_ppo --timesteps 1000000")
         return
 
     # Load eval results if available
@@ -70,15 +64,11 @@ def save_model_package():
     with open(meta_path, "w") as f:
         json.dump(metadata, f, indent=2, default=str)
 
-    print("=" * 60)
-    print("  Model Package Saved")
-    print("=" * 60)
-    print(f"  Model:    {src}")
-    print(f"  Metadata: {meta_path}")
-    print(f"  Size:     {metadata['deployment']['model_size_kb']} KB")
-    print(f"  Intercept Rate: {metadata['interception_rate']}")
-    print(f"  $/Interception: {metadata['cost_per_interception_usd']}")
-    print("=" * 60)
+    print(f"Model: {src}")
+    print(f"Metadata: {meta_path}")
+    print(f"Size: {metadata['deployment']['model_size_kb']} KB")
+    print(f"Intercept Rate: {metadata['interception_rate']}")
+    print(f"Cost/Interception: ${metadata['cost_per_interception_usd']}")
 
 
 if __name__ == "__main__":
