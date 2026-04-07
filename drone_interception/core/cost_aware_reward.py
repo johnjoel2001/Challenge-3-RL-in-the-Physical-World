@@ -1,20 +1,9 @@
-"""
-Cost-Aware Reward Function for Drone Interception RL.
+"""Cost-aware reward optimization for drone interception.
 
-This module provides an alternative reward formulation that explicitly maps
-RL reward components to approximate real-world dollar costs. This lets us
-train a policy that optimizes for COST PER INTERCEPTION, not just success rate.
+Maps RL rewards to approximate real-world dollar costs, training for
+COST PER INTERCEPTION rather than success rate alone.
 
-KEY INSIGHT: A policy that catches 80% of targets at $300/attempt beats one
-that catches 95% at $3,000,000/attempt. The economics matter as much as the
-accuracy.
-
-The cost model is based on:
-- Commodity drone hardware: ~$300 (DJI Tello class)
-- LiPo battery degradation: ~$5 per mission cycle
-- Edge compute (Jetson Nano): ~$50 one-time, $0 marginal per mission
-- Operator attention: $0 (fully autonomous — that's the point)
-- Value of neutralizing a threat: ~$50,000 (estimated based on property/personnel protection)
+Key insight: 80% catch at $300/shot beats 95% at $3M/shot. Economics matter.
 """
 
 import numpy as np
@@ -25,68 +14,23 @@ from typing import Dict, Any, Optional
 # COST MODEL CONSTANTS — Based on real-world pricing (2024 estimates)
 # =============================================================================
 
-# Hardware cost of the interceptor drone
-# Based on: custom-built quadrotor with flight controller, frame, motors, ESCs
-# DJI Tello (~$100) + compute module (~$50) + net/capture mechanism (~$100) + misc ($50)
-DRONE_HARDWARE_COST = 300.0  # USD
-
-# Battery cost per mission
-# LiPo battery: ~$25, rated for ~200 cycles = $0.125/cycle base
-# Energy-dependent degradation adds to this — harder missions wear battery faster
-# We model this as a rate per unit of thrust-squared per timestep
-BATTERY_RATE_PER_THRUST = 0.001  # USD per unit of (action_magnitude^2) per step
-
-# Drone replacement cost when destroyed (collision with obstacle)
-# If the drone crashes, we lose the full hardware cost
-# In a real deployment, some components (compute module, sensors) might be recoverable
-# but we conservatively assume total loss
-COLLISION_REPLACEMENT_COST = 300.0  # USD
-
-# Time cost per timestep
-# This captures opportunity cost: while our drone is chasing one target,
-# it can't intercept others. Also accounts for mission risk increasing over time.
-# At 60Hz sim, 500 steps = ~8.3 seconds. Cost: $0.50/step * 500 = $250 max.
-TIME_COST_PER_STEP = 0.50  # USD per timestep
-
-# Value of successfully neutralizing a threat
-# This is the "savings" from not needing a $3M Patriot missile or $80K Coyote.
-# We estimate the average value of protecting the defended asset.
-# Conservative estimate — real value depends heavily on the threat.
-INTERCEPTION_VALUE = 50000.0  # USD (value of neutralizing a drone threat)
-
-# Training cost (one-time, amortized across all missions)
-# ~500K timesteps on a cloud GPU: ~$50 on AWS/GCP
-# Amortized across 1000+ missions, this is negligible per-mission
-TRAINING_COST_AMORTIZED = 0.05  # USD per mission (assuming 1000+ mission lifetime)
+# Cost components based on 2024 market pricing
+DRONE_HARDWARE_COST = 300.0  # USD (frame + controllers + compute module)
+BATTERY_RATE_PER_THRUST = 0.001  # USD per (thrust squared * step); captures degradation scaling
+COLLISION_REPLACEMENT_COST = 300.0  # USD (assumes total loss)
+TIME_COST_PER_STEP = 0.50  # USD; opportunity cost while pursuing one target
+INTERCEPTION_VALUE = 50000.0  # USD; value vs. $3M Patriot or $80K Coyote
+TRAINING_COST_AMORTIZED = 0.05  # USD per mission (amortized across fleet lifetime)
 
 
 class CostAwareReward:
-    """
-    Maps RL reward components to approximate real-world dollar costs.
-
-    Instead of abstract reward units, this class tracks actual estimated
-    dollar costs for each episode. This enables direct comparison between
-    our RL approach and traditional counter-UAS methods.
-
+    """Track episode costs in real dollars; enables direct comparison with traditional systems.
+    
     Usage:
         cost_reward = CostAwareReward()
         cost_reward.reset()
-
-        # During episode:
         reward = cost_reward.compute(action, distance, prev_distance, info)
-
-        # After episode:
-        summary = cost_reward.get_episode_summary()
-        print(f"Cost per interception: ${summary['cost_per_interception']:.2f}")
-
-    The key metric is $/interception:
-        cost_per_interception = total_mission_cost / success_probability
-
-    For comparison:
-        - Patriot missile:   $3,000,000 / interception
-        - Stinger missile:   $120,000 / interception
-        - Coyote drone:      $80,000 / interception
-        - Our RL drone:      ~$350 / interception  ← 1000x cheaper
+        summary = cost_reward.get_episode_summary()  # Returns cost breakdown
     """
 
     def __init__(
@@ -97,16 +41,7 @@ class CostAwareReward:
         time_cost: float = TIME_COST_PER_STEP,
         interception_value: float = INTERCEPTION_VALUE,
     ) -> None:
-        """
-        Initialize the cost-aware reward calculator.
-
-        Args:
-            drone_cost: Hardware cost of the interceptor drone (USD).
-            battery_rate: Battery degradation rate per thrust unit per step (USD).
-            collision_cost: Cost of replacing a destroyed drone (USD).
-            time_cost: Opportunity cost per timestep (USD).
-            interception_value: Dollar value of successfully neutralizing a threat.
-        """
+        """Initialize cost tracker with configurable pricing model."""
         self.drone_cost = drone_cost
         self.battery_rate = battery_rate
         self.collision_cost = collision_cost
@@ -117,7 +52,7 @@ class CostAwareReward:
         self._reset_tracking()
 
     def _reset_tracking(self) -> None:
-        """Reset all per-episode cost tracking variables."""
+        """Clear per-episode accumulators."""
         self.episode_energy_cost = 0.0       # Cumulative battery cost
         self.episode_time_cost = 0.0         # Cumulative time/opportunity cost
         self.episode_collision_cost = 0.0    # Drone replacement (0 or collision_cost)
@@ -136,92 +71,57 @@ class CostAwareReward:
         prev_distance: float,
         info: Dict[str, Any],
     ) -> float:
-        """
-        Compute cost-aware reward for one timestep.
-
-        This reward function is designed to train a policy that minimizes
-        the TOTAL COST of interception, not just maximize success rate.
-
-        The reward has the same sign convention as standard RL rewards
-        (higher is better), but each component maps to a real dollar cost.
-
-        Args:
-            action: The thrust action taken (3-dim, [-1, 1]).
-            distance: Current distance to target (meters).
-            prev_distance: Previous distance to target (meters).
-            info: Episode info dict with termination flags.
-
-        Returns:
-            Shaped reward (float) with cost-awareness.
+        """Shape single-step reward combining progress, cost, and success incentives.
+        
+        Each component maps to real dollars; higher reward = lower cost path.
         """
         self.episode_steps += 1
         reward = 0.0
 
-        # --- PROGRESS REWARD ---
-        # Closing distance is "free" in dollar terms but essential for learning.
-        # We scale it to be meaningful relative to the cost penalties.
+        # Progress reward — scaled for RL signal alongside cost penalties
         progress = (prev_distance - distance) * 10.0
         reward += progress
 
-        # --- ENERGY COST (maps to battery degradation) ---
-        # Every unit of thrust squared costs real money in battery life.
-        # A gentle approach that uses 50% less thrust costs 50% less.
+        # Energy cost maps to battery degradation (thrust²)
         thrust_magnitude = np.sum(action ** 2)
         self.episode_total_thrust += thrust_magnitude
         energy_cost = self.battery_rate * thrust_magnitude
         self.episode_energy_cost += energy_cost
-        # Negative reward proportional to energy cost
-        reward -= energy_cost * 100.0  # Scale up for RL signal strength
+        reward -= energy_cost * 100.0  # Scale to RL magnitude
 
-        # --- TIME COST ---
-        # Every timestep has an opportunity cost — we could be intercepting
-        # another target, or the current target could reach its objective.
+        # Time cost — opportunity cost of extended pursuit
         self.episode_time_cost += self.time_cost
-        reward -= 0.1  # Fixed per-step penalty (RL-scale)
+        reward -= 0.1
 
-        # --- INTERCEPTION BONUS ---
-        # Successfully catching the target is worth $50K in avoided damage.
-        # The RL reward is a large positive to ensure the agent prioritizes this.
+        # Interception bonus — strong signal for mission success
         if info.get("intercepted", False):
             self.episode_intercepted = True
-            reward += 100.0  # Strong positive signal
+            reward += 100.0
 
-        # --- COLLISION PENALTY ---
-        # Crashing = total drone loss = $300 replacement.
-        # This also means mission failure (no interception).
+        # Collision penalty — total drone + mission loss
         if info.get("collision", False):
             self.episode_collision_cost = self.collision_cost
             reward -= 50.0
 
-        # --- PROXIMITY BONUS ---
-        # Extra reward when closing in — helps overcome evader's reactive evasion
+        # Proximity bonus — helps agent close final distance
         if distance < 3.0:
             reward += (3.0 - distance) * 2.0
 
-        # --- BOUNDARY PENALTY ---
+        # Out-of-bounds penalty
         if info.get("out_of_bounds", False):
             reward -= 50.0
 
         return float(reward)
 
     def get_episode_summary(self) -> Dict[str, float]:
-        """
-        Get a complete cost breakdown for the completed episode.
-
-        Returns a dict with all cost components and the key metric:
-        cost_per_interception — the total dollar cost assuming this success
-        rate were maintained over many missions.
-
-        Returns:
-            Dict with cost breakdown and per-interception cost estimate.
-        """
-        # Total mission cost = base drone amortization + energy + time + collision
-        # If drone survives, hardware cost is amortized across ~100 missions
+        """Return cost breakdown including cost-per-interception metric."""
+        # Hardware amortization: lost drones cost full replacement, others amortized
         if self.episode_collision_cost > 0:
-            hardware_cost = self.drone_cost  # Drone destroyed — full replacement
+            hardware_cost = self.drone_cost  # Destroyed — full replacement
         else:
-            hardware_cost = self.drone_cost / 100.0  # Amortized over 100 missions
+            hardware_cost = self.drone_cost / 100.0  # Amortized over fleet lifetime
 
+        # Total mission cost accumulation
         total_cost = (
             hardware_cost
             + self.episode_energy_cost
@@ -230,15 +130,13 @@ class CostAwareReward:
             + TRAINING_COST_AMORTIZED
         )
 
-        # Cost per interception: total_cost / P(success)
-        # For a single episode, P(success) = 1.0 if intercepted, else we use
-        # a high cost to represent failure
+        # Cost per interception: what we spent to achieve this outcome
+        # Both success and failure incur costs; this shows the efficiency
         if self.episode_intercepted:
             cost_per_interception = total_cost
         else:
             # Mission failed — cost is incurred with no interception
-            # Report as the cost that was "wasted"
-            cost_per_interception = total_cost  # Still spent this much, got nothing
+            cost_per_interception = total_cost
 
         return {
             "hardware_cost": hardware_cost,
@@ -262,38 +160,22 @@ class CostAwareReward:
         avg_time_cost: float = 150.0,
         drone_loss_rate: float = 0.05,
     ) -> Dict[str, float]:
-        """
-        Compute annual fleet operating costs at a given success rate.
-
-        This is used for the cost comparison dashboard — it projects
-        real-world deployment costs based on training results.
-
-        Args:
-            success_rate: Fraction of missions that succeed (0-1).
-            missions_per_month: Expected interception attempts per month.
-            drone_hardware_cost: Cost per drone unit (USD).
-            avg_energy_cost: Average battery/energy cost per mission (USD).
-            avg_time_cost: Average time-related cost per mission (USD).
-            drone_loss_rate: Fraction of missions where drone is lost.
-
-        Returns:
-            Dict with annual cost projections.
-        """
+        """Project annual fleet operating costs; useful for deployment planning."""
         annual_missions = missions_per_month * 12
         successful_interceptions = annual_missions * success_rate
 
-        # Drone replacement costs (lost drones)
+        # Drone replacement costs — losses are part of operational reality
         drones_lost = annual_missions * drone_loss_rate
         replacement_cost = drones_lost * drone_hardware_cost
 
-        # Operating costs
+        # Operating costs scale with mission volume
         energy_cost = annual_missions * avg_energy_cost
         time_cost = annual_missions * avg_time_cost
 
-        # Initial fleet purchase (assume 5 drones for redundancy)
+        # Initial fleet purchase; assumes conservative 5-drone buffer for ops availability
         initial_fleet = 5 * drone_hardware_cost
 
-        # Total annual cost
+        # Total cost divided by successful outcomes — the economic efficiency metric
         annual_cost = initial_fleet + replacement_cost + energy_cost + time_cost
         cost_per_successful_interception = (
             annual_cost / max(successful_interceptions, 1)
